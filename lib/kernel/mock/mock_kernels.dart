@@ -65,6 +65,10 @@ abstract final class MockKernels {
         // told the route's ref is there, so a mock starts with no notice and
         // nothing of the user's is looked at.
         credentials: () async => {DshPatch.credentialRef},
+        // No loopback either: a widget test's fake async owns no socket, and
+        // there is no one behind a mock's panel to answer.
+        questionServer: (_) async =>
+            throw UnsupportedError('mock kernels ask nothing'),
       ),
       catalog: sessions == null ? null : DshCatalog(sessions: store),
     );

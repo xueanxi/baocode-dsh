@@ -55,20 +55,32 @@ abstract final class DshPatch {
 
   /// The patch for a dsh at [version]; [withBash] turns the `bash` tool on.
   /// dsh disables it on Windows, and the Git Bash executor the plugin mounts
-  /// is what serves it.
-  static String content({required String version, bool withBash = false}) =>
-      _patch([
-        header(version),
-        '',
-        ..._route,
-        '- id: acp',
-        "  name: '@deepseek-ai/dsh-acp'",
-        '  inject: [acpAppStartup]',
-        '  config:',
-        '    provider: $providerId',
-        '    model: $modelId',
-        if (withBash) ...['- id: tool-bash', '  disabled: false'],
-      ]);
+  /// is what serves it. [askBridge] is the `file://` URL of the answerer
+  /// written by `dsh_ask_bridge.dart`: with one, dsh's `ask_user_question` is
+  /// mounted and the app's bridge answers it.
+  static String content({
+    required String version,
+    bool withBash = false,
+    String? askBridge,
+  }) => _patch([
+    header(version),
+    '',
+    ..._route,
+    '- id: acp',
+    "  name: '@deepseek-ai/dsh-acp'",
+    '  inject: [acpAppStartup]',
+    '  config:',
+    '    provider: $providerId',
+    '    model: $modelId',
+    if (withBash) ...['- id: tool-bash', '  disabled: false'],
+    if (askBridge != null) ...[
+      '- insert:',
+      '    - id: baocode-ask',
+      "      name: '@deepseek-ai/dsh-tool-ask-user'",
+      '    - id: baocode-ask-bridge',
+      "      name: '$askBridge'",
+    ],
+  ]);
 
   /// The patch one question is asked with, for a dsh at [version] (see
   /// `dsh_ask.dart`): [content]'s provider and model, over the `headless`
@@ -147,17 +159,21 @@ abstract final class DshPatch {
   /// patch mounts the executor it runs on (F26: naming an uninstalled plugin
   /// is ignored, so enabling the tool without it would only pretend bash is
   /// there). [dshHome] is where that profile is looked for: `DSH_HOME`, else
-  /// `~/.dsh`; a test gives its own.
+  /// `~/.dsh`; a test gives its own. [askBridge] is the answerer's `file://`
+  /// URL (`dsh_ask_bridge.dart`), or null where no question endpoint could be
+  /// started.
   static Future<String> ensure({
     required DshInstall install,
     required String directory,
     bool withBash = false,
+    String? askBridge,
     String? dshHome,
   }) async {
     final file = File(p.join(directory, fileName));
     final text = content(
       version: install.version,
       withBash: withBash && await _pluginInstalled(dshHome),
+      askBridge: askBridge,
     );
     try {
       if (await file.readAsString() == text) return file.path;

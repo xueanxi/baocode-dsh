@@ -82,6 +82,35 @@ void main() {
     expect(RegExp(r'[A-Za-z0-9_\-]{32,}').hasMatch(text), isFalse);
   });
 
+  test(
+    'the answerer is inserted where there is one, and left out where not',
+    () {
+      const bridge =
+          'file:///C:/Users/me/AppData/Roaming/BaoCode/dsh/ask_bridge.mjs';
+      final answerer = DshPatch.content(
+        version: '0.2.0-rc.2',
+        askBridge: bridge,
+      );
+      expect(answerer, contains('- insert:'));
+      expect(answerer, contains('    - id: baocode-ask'));
+      expect(
+        answerer,
+        contains("      name: '@deepseek-ai/dsh-tool-ask-user'"),
+      );
+      expect(answerer, contains('    - id: baocode-ask-bridge'));
+      expect(answerer, contains("      name: '$bridge'"));
+      // After the ACP entry: the insert is read once the profile is composed.
+      expect(
+        answerer.indexOf('- insert:'),
+        greaterThan(answerer.indexOf('- id: acp')),
+      );
+
+      final without = DshPatch.content(version: '0.2.0-rc.2');
+      expect(without, isNot(contains('baocode-ask')));
+      expect(without, isNot(contains('insert:')));
+    },
+  );
+
   test('the one question runs headless, its sessions out of the user\'s', () {
     final text = DshPatch.askContent(
       version: '0.2.0-rc.2',

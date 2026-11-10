@@ -124,6 +124,25 @@ dsh 的三个沙箱档位（`DSH_PERMISSION_MODE`，F22）：
 
 注意：`danger-full-access` 下审批策略是 `never`，需要审批的请求会被拒绝（F23）。
 
+## 4.1 选项提问（`ask_user_question`）
+
+dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 挂了 `user-questions` 服务，但只有 web 客户端实现了它的 answerer，ACP 只桥审批。所以有用户在场时，补丁会插两行：
+
+- `id: baocode-ask` 挂 `@deepseek-ai/dsh-tool-ask-user`，模型看到的工具就是 `ask_user_question`；
+- `id: baocode-ask-bridge` 挂 BaoCode 自己的 `ask_bridge.mjs`（写在应用数据目录的 `dsh/` 下，补丁用 `file://` 绝对 URL 引用）。
+
+桥插件监听 dsh 的 `user-questions/request` 瀑布，把问题 POST 到内核起的**本机 loopback 端点**（随机端口；端点只在本次对话内有效，token 随机生成），随后每 300ms 轮询答案。端点地址与 token 只放在 dsh 的环境变量 `BAOCODE_ASK_URL` / `BAOCODE_ASK_TOKEN` 里，**不写进补丁**。
+
+问题进 `QuestionRequest`，与 Claude Code 的 AskUserQuestion 共用同一张选项面板：`1-9` 选择、`↑/↓` 移动、多选、Other 自由输入、可折叠、可跳过。回答按 dsh 的形状回：
+
+- 命中选项标签的进 `selected`；用户自己写的进 `custom`；
+- 跳过回空 `selected`（dsh 的工具把它读作 skipped，不是取消）；
+- 轮次结束、进程退出、release 时把待答问题标成 `cancelled`，插件停止等待，面板不会一直挂着。
+
+**为什么不用 ACP 自带的 MCP server**：ACP 的 `mcpServers` 确实能给 dsh 挂 streamable-http MCP，但 dsh 的 MCP 客户端对单次工具调用有 **60 秒硬超时**，而 ACP 没有暴露 `toolCallTimeoutMs`、补丁也改不到动态创建的 MCP client；等用户超过一分钟就会失败。桥插件走 dsh 自己的工具通道，没有这个上限。
+
+没有人在电脑前的会话（`KernelWorkspace.approvesAll`，bot 的）**不插**这两行；端点起不来时同样不插。两种情况 agent 都退回文字提问，其余照常。
+
 ## 5. 已知限制
 
 以下每条都对应规格 §9 与事实表，接受它们再用这个内核：
@@ -142,7 +161,7 @@ dsh 的三个沙箱档位（`DSH_PERMISSION_MODE`，F22）：
 8. **跨内核的“上次选择”按 kind 全局保存**：不同内核共用一份按 kind（model/effort/permission）记的选择；DSH 会丢弃它不认识的 id（例如 Claude 的 model id），所以切内核后可能要重选档位/模型。
 9. **用量不进 BaoCode 的账本**：`usage_update` 只用来刷新工具栏的上下文占用与窗口大小；不声明 `ReportsUsage`，设置→用量里没有 DSH 的账。
 10. **切视图回来要重新握手（约 6 秒）**：视图全关时内核释放进程，下次进入重新定位、起进程、`initialize`，再 `session/resume`。这 6 秒是 dsh 的启动时间（F20），不是卡死。
-11. 其他不做的：token 级流式、会话内切换档位、fork/rewind/重命名/消息排队/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh。
+11. 其他不做的：token 级流式、会话内切换档位、fork/rewind/重命名/消息排队/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1）。
 12. 本设计的补丁只声明 `model`，没有声明 `reasoningEffort`（F6）：dsh 不报 `reasoning_effort`，所以思考强度选择器不显示（内核实现了 `SelectsEffort`，选项为空时 UI 自然不显示）。
 13. 上下文窗口在 dsh 报告前按补丁里的 `512000` 显示（这个数只有一处：`DshPatch.contextWindow`），`usage_update.size` 到达后覆盖。
 14. 版本低于 `0.2.0-rc.2` 时只发一条 warning（每个会话一次），不阻止使用；`unknown` 版本不做比较、不提醒。
@@ -152,10 +171,11 @@ dsh 的三个沙箱档位（`DSH_PERMISSION_MODE`，F22）：
 18. dsh 的 `session/list` 只有 `{sessionId, cwd}`、没有标题与时间（F17），所以列表与标题来自 BaoCode 自己的账本（§2、规格 §5.13），不来自 dsh。
 19. 线程记住的内核在当前项目不可用时（例如把 DSH 对话挪进多文件夹工作区，或挪到远端项目），会话会以当前第一个可用的内核打开（通常是 Claude Code），不报错；一个都不可用时才保留原内核。这是通用的线程恢复行为（`ChatSession._availableKernel`），不是 DSH 特有。
 20. **斜杠菜单只读 dsh 的默认 skill 根**（§2 的「斜杠菜单里的 skill」）：不读用户 profile 里的 `customSkillDirs`，对话开着时也不热更新，下一次打开对话（`prepare()`）才重读。放进 `~/.dsh/skills` 的 skill，重开或重进对话即可见。
+21. 选项提问依赖 dsh 的内部接缝 `user-questions/request` 与 `dsh-tool-ask-user`（验证于 0.2.0-rc.2）。dsh 换掉这个事件名或包名时，工具会静默不在或调用失败；桥接文件随应用一起更新，不写进 `~/.dsh`。另外，dsh 的环境里有端点 token，它自己跑的 shell 命令理论上能读到并伪造一次提问（本机开发工具的威胁模型，不承诺防御）。
 
 ## 6. 协议映射
 
-启动：`node <bin.js> --profile acp --patch <绝对路径>`，cwd = 项目目录；stdin 保持打开（EOF 会让 dsh 自己 flush 后退出，约 5 秒，F1）。环境以登录 shell 的环境为底，加 `DSH_PERMISSION_MODE`，不设 `DSH_HOME`。
+启动：`node <bin.js> --profile acp --patch <绝对路径>`，cwd = 项目目录；stdin 保持打开（EOF 会让 dsh 自己 flush 后退出，约 5 秒，F1）。环境以登录 shell 的环境为底，加 `DSH_PERMISSION_MODE`；有选项提问时再加 `BAOCODE_ASK_URL` 与 `BAOCODE_ASK_TOKEN`（§4.1）。不设 `DSH_HOME`。
 
 握手：`initialize {protocolVersion: 1}` → `protocolVersion: 1`、`agentCapabilities.promptCapabilities.image`、`sessionCapabilities {close, list, resume}`；`clientCapabilities` 被忽略（F2）。
 
@@ -172,6 +192,7 @@ dsh 的三个沙箱档位（`DSH_PERMISSION_MODE`，F22）：
 | `session/prompt` 的 `{stopReason}` | `TurnEnded`；`cancelled` → `interrupted: true`（F13） |
 | JSON-RPC 错误（如 `-32603`） | 先 `ItemUpserted('error:<turnId>', NoticeItem(error, 文本))`，再 `TurnEnded(interrupted: true)`；健康态保持 `ready`（F12） |
 | `session/request_permission` | `InteractionRequested(ApprovalRequest)`；应答后 `InteractionResolved`（F10） |
+| `user-questions/request`（桥插件） | 插件 POST 到本机 `/questions` → `InteractionRequested(QuestionRequest)`；应答后插件轮询到 `{answers:[{id, selected, custom?}]}` → `InteractionResolved`；轮次结束/进程退出 → `cancelled`（§4.1） |
 | 其他服务端请求 | 回 `{outcome: {outcome: 'cancelled'}}`，不让轮次悬着 |
 
 一轮的固定顺序（§5.5）：
@@ -199,6 +220,7 @@ TurnEnded(turnId, interrupted:, worked:)
 - 位置：应用数据目录下的 `dsh/acp.patch.yml`（Windows `%APPDATA%\baocode\dsh\acp.patch.yml`；macOS `~/Library/Application Support/baocode/dsh/acp.patch.yml`；Linux `~/.config/baocode/dsh/acp.patch.yml`）。测试里是临时数据目录。
 - 会话账本也在应用数据目录下：`dsh/sessions/index/<id>.json` 与 `dsh/sessions/history/<id>.json`，与补丁无关，不会因补丁重建而丢失（见规格 §5.13）。
 - 内容由 `DshPatch.content` 生成：`llm-pi-ai` 声明 `stepcodev2` 路由（`apiKeyEnv: STEPCODEV2_API_KEY`、`api: openai-completions`、`baseURL: https://i-ai-gw.stepx.com/v1`、模型 `deepseek-v4.1-flash`、`contextWindow: 512000`、`input: [text, image]`），`acp` 声明该 provider 与该模型。装了 Git Bash 插件、且本机找得到 Git Bash 时，再追加启用 `tool-bash` 的一行——执行器由插件的 bundle patch 插入，补丁里写不进去（F28）。
+- 有选项提问时（§4.1），再追加一个 `insert`，挂上 `@deepseek-ai/dsh-tool-ask-user` 与 `file://` 绝对 URL 的 `ask_bridge.mjs`；插件文件与补丁同在 `dsh/` 下，内容变了就重写。补丁里不写端点地址与 token（它们在 dsh 的环境变量里）。
 - **不含密钥**：只写 `apiKeyEnv` 的名字；key 留在 `~/.dsh`，由 dsh 自己读。文件里也不会出现 `!!js`（生成时会检查）。
 - `apiKeyEnv` 必须与 `~/.dsh/.credentials.yaml` 的 `refs:` 里的 key **逐字一致**（F24）。改路由名时要同时改 `DshPatch.credentialRef`，否则预检会报缺凭据、每轮以 `MISSING_CREDENTIAL` 失败。
 - 什么时候重建：内容与目标文本不一致就重建——dsh 版本变了（文件头记版本）、补丁内容变了（例如多出启用 `tool-bash` 的一行）、或被外部改过/删掉。内容一致就原样保留。
@@ -280,6 +302,16 @@ resume 不会重放历史，也不会改权限档位（F16）。
 
 另外记住：装了 gitbash 之后，`read-only` 档位对 bash **不生效**（该执行器在 win32 是 unconfined，F27）；受限的只有 pwsh。
 
+### 选项提问没出现，或答案没回到 dsh
+
+`ask_user_question` 在 ACP profile 里不是 dsh 自带的：它来自补丁插的两行和 BaoCode 的桥插件（§4.1）。
+
+1. 先看补丁（`<应用数据>/dsh/acp.patch.yml`）里有没有 `- insert:` 与 `baocode-ask`。没有就是“没有人在场”或端点没起来——看应用日志里有没有 `DSH questions:`。
+2. 看 `<应用数据>/dsh/ask_bridge.mjs` 是否存在。它的 URL 是 `file://` 绝对路径；路径里有空格/中文不影响，但文件被删或被杀软隔离会失败。
+3. 面板出现但模型没收到答案：检查 dsh 的环境里 `BAOCODE_ASK_URL` / `BAOCODE_ASK_TOKEN` 是否在（桥插件读不到就什么也不做），以及本机防火墙是否拦了 loopback。
+4. 只在轮次进行中才有面板：轮次结束、`release`、进程退出都会把待答问题取消，这是有意的。
+5. 模型只是没用工具、改用文字提问：重试时明确说“用 `ask_user_question` 问”；工具在工具列表里时它通常会照做。
+
 ### 其他
 
 | 现象 | 原因 / 处理 |
@@ -319,6 +351,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 回复整条出现；工具卡出现、结束有结果文本（失败时是失败状态）
 - [ ] 命令越出工作区时弹审批：有工具名与理由（没有理由时明说），只有“允许一次 / 拒绝”
 - [ ] 允许后任务继续；拒绝后本轮能正常结束
+- [ ] 让 agent 用 `ask_user_question` 问一个选择题：面板出现，`1-9` 可选，选完本轮继续并复述所选
+- [ ] 面板上按 Esc 跳过：本轮继续，dsh 收到空选择；轮次结束或切走视图不留下悬空面板
 - [ ] 中途停止可用，停止后还能继续对话
 - [ ] 切换模型立即生效，不重启；dsh 没报思考强度时没有该选项
 - [ ] 第一次回复前上下文窗口显示 512K，之后随 `usage_update` 变化
@@ -361,6 +395,9 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 | `lib/kernel/dsh/dsh_skills.dart`、`dsh_skills_io.dart` | `/` 菜单里的 skill：按 dsh 的默认根与 rank 扫描、解析 frontmatter、合并同名；web 用 `dsh_skills_stub.dart`（没有文件系统） |
 | `lib/kernel/dsh/dsh_translator.dart` | 六种 update、prompt 结果、JSON-RPC 错误 → `KernelEvent` 与 turn 契约 |
 | `lib/kernel/dsh/dsh_approval.dart` | 审批请求/应答/取消，工具名与理由的关联 |
+| `lib/kernel/dsh/dsh_questions.dart` | `ask_user_question` → `QuestionRequest`，应答/跳过/取消 |
+| `lib/kernel/dsh/dsh_question_server.dart`、`dsh_question_server_io.dart`、`dsh_question_server_stub.dart` | 本机 loopback 提问端点：token、POST/轮询/取消，把选项标签映射成 dsh 的 `{selected, custom}` |
+| `lib/kernel/dsh/dsh_ask_bridge.dart` | 写 `ask_bridge.mjs`（监听 dsh 的 `user-questions/request`，轮询上面的端点），返回补丁用的 `file://` URL |
 | `lib/kernel/dsh/dsh_notices.dart` | 会话内提示（版本、凭据、图片）与凭据 refs 预检 |
 | `lib/kernel/dsh/dsh_path_setting.dart` | `dshCode.path` 的解析与 `current` 缝 |
 | `lib/kernel/dsh/mock_dsh_transport.dart` | 测试用的脚本化 dsh 进程 |
@@ -375,6 +412,9 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - `test/kernel/dsh_kernel_test.dart`：握手、会话时机、模型、健康、权限锁定、release/resume、能力随进程复位、`prepare()` 后 `/` 菜单来自 skill 根并带文件路径；
 - `test/kernel/dsh_turn_test.dart`：一轮的事件顺序（含带图时提示在同一轮内、握手前发图等握手）、文本、思考、工具、usage、错误、取消；
 - `test/kernel/dsh_approval_test.dart`：审批的挂起、三种应答线形、理由回退、迟到应答；
+- `test/kernel/dsh_question_server_test.dart`：桥插件文件的写入与不重写、端点的 token 校验、未知问题 404；
+- `test/kernel/dsh_kernel_test.dart`（追加）：问题走面板、回答的 `selected`/`custom`、跳过、release 时 `cancelled`、无人在场时不插桥；
+- `test/e2e_dsh_real_test.dart`：`-t dsh-e2e` 才跑，真 dsh 调 `ask_user_question`，自动替用户答 Apple，断言工具结果与回复；
 - `test/kernel/dsh_integration_test.dart`：跨票回归，prepare → 首条消息建会话 → 工具+审批 → 下一轮 → 出错轮 → release → prepare/resume → dispose；
 - `test/kernel/dsh_restart_test.dart`：重启后再续（resume 而非 new）、历史与标题的读写、文件账本与目录；
 - `test/kernel/dsh_capabilities_test.dart`、`dsh_notices_test.dart`：能力声明与提示去重、凭据预检；

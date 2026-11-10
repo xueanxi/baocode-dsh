@@ -54,6 +54,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 | F28 | 补丁层改不了一个已存在 id 的 `name`：`- id: bash-sandbox` + `name: dsh-gitbash-shell/shell` 被跳过（stderr：`patch: name mismatch for "bash-sandbox" (expected "@deepseek-ai/dsh-bash-sandbox", got "dsh-gitbash-shell/shell"), skipping`），因为 `bash-sandbox` 在 base 里属于官方 `@deepseek-ai/dsh-bash-sandbox`。`dsh-gitbash-shell` 0.38.5 自己的 bundle patch 已 insert `gitbash-executor`（`bashPath: ''` = 自动解析，本机解析到 `D:/tools/git/Git/bin/bash.exe`，source `path-git`），所以补丁只需 `tool-bash: disabled: false`。另：0.52.0 的 peer 要求 dsh ≥ 0.2.2-rc.1，装 0.2.0-rc.2 会被拒 |
 | F29 | 一次性问答（`--profile headless --patch … --json -`，任务走 stdin）：stdout 是逐行事件，答案在最后一个 `{"type":"final","text":…}`；`thinking` 单独一条事件，不经 `--json` 时会混进 stdout，所以必须用 `--json` 只取 `final`。`agent-default-model` 的 `config`（默认 `deepseek-official`/`deepseek-flash`）决定它的模型；`session-persistence-jsonl.config.root` 可以改会话落点（实测指到临时目录后 `~/.dsh/sessions` 不新增），指到临时目录时不再有 `session-checkpoint-policy` 的 "did not activate" 警告（`disabled: true` 会警告）；进程退出码与 `status` 的 `turn_end.reason.error.message` 说明失败（模型 id 不存在时实测 exit 1、`final.text` 空、stderr 一行 503）；本机一次问答约 6.3 s |
 | F30 | **ACP 没有命令面**：`initialize`、`session/new`、`session/*` 都不返回命令列表，dsh 0.2.0-rc.2 里也没有 `available_commands_update`/`AvailableCommand` 类型（`dsh-acp` 与全包源阅读）；web 客户端的 `skills/list` 是会话 Remote，不是 ACP 方法。但 **`/name` 作为正文发出去会被 dsh 加载**：`dsh-tool-skill` 的 `agent/pre-step` 用 `(^|\s)/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)` 扫用户消息的文本块，命中且 `user-invocable` 就注入该 skill 的 `SKILL.md`。skill 根见 `dsh-skill-filesystem`：项目 `.dsh/skills`(100)、`.agents/skills`(200)，用户 `$DSH_HOME/skills`(400，跳过 `.system`)、`$DSH_AGENTS_HOME/skills`(500)，`$DSH_BUNDLED_SKILL_DIR`(600)；项目根是最近的带 `.git` 的祖先 |
+| F31 | 选项提问：ACP profile 的 `dsh-base` 已挂 `user-questions` 服务，但**没有**任何 answerer（web 专属）；`@deepseek-ai/dsh-tool-ask-user` 不在 ACP bundle 里。补丁 `insert` 可挂它，并挂一个 `file://` 绝对 URL 的本地插件（实测 dsh 0.2.0-rc.2 能加载）；插件用 `ctx.on('user-questions/request', …)` 回答，answer 形状 `{answers:[{id, selected:[…], custom?}]}`。不能改走 ACP 的 `mcpServers`（streamable-http）：dsh 的 MCP 客户端对单次 `tools/call` 有 **60 s 硬超时**，ACP 没暴露 `toolCallTimeoutMs`，等用户超过一分钟必然失败（实测代码：`dsh-mcp-client` 默认 `DEFAULT_TOOL_CALL_TIMEOUT_MS = 6e4`） |
 
 ## 4. User Stories
 
@@ -90,6 +91,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 31. 作为开发者，我想有一个手动 smoke 脚本，需要时真跑一次 dsh，不进 CI
 32. 作为开发/维护者，我想让每张票的改动范围独占，能与其他票并行实现
 33. 作为用户，我想在输入框的 `/` 菜单里看到 dsh 会加载的 skill（包括我刚放进 `~/.dsh/skills` 的），选中后由 dsh 真的加载它，而不是只发一段普通文本
+34. 作为用户，我想在 dsh 需要我拍板时看到可点选的选项（而不是一段文字问题），选完它继续干活；这和 Claude Code 的 AskUserQuestion 是同一张面板
 
 ## 5. Implementation Decisions
 
@@ -98,6 +100,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 - **内核适配器**（新）：实现 `AgentKernel` 与能力接口；`prepare` 起进程并握手，第一条消息时才 `session/new`。
 - **翻译层**（新）：把六种 update、prompt 结果、JSON-RPC 错误翻译成 `KernelEvent`，并负责 turn 的起止。
 - **审批**（新）：`request_permission` → `InteractionRequested`，应答映射；与前一条 `tool_call` 关联工具名与理由。
+- **选项提问**（新）：补丁 `insert` 挂 `dsh-tool-ask-user` 与一个 `file://` 本地桥插件；插件监听 `user-questions/request`，经本机 loopback 端点把问题送进 `QuestionRequest`，答案按 `{selected, custom}` 回去（§5.16）。
 - **传输层**（新）：起 `node <dsh>/lib/bin.js --profile acp --patch <abs>`、按行收发 JSON-RPC、stderr 环、退出信息、Windows 进程树收尾、子进程登记。
 - **定位**（新）：登录 shell 环境 → 设置值 → PATH 垫片 → 平台 npm 全局根；输出 `node`、`bin.js`、版本、包目录。
 - **补丁生成**（新）：应用数据目录 `dsh/acp.patch.yml`，原子写，头部记版本，内容变化即重建。
@@ -301,6 +304,18 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - **文件**：`KernelCommand.path` 带 `SKILL.md` 的绝对路径；`ChatScreen._commandFile` 先看内核给的路径，再退回 `CustomizationStore`（Claude Code 的 skills 走那条）。
 - **不做**：dsh 的主机命令（`/compact`、`/goal` 等）不列——命令面只在 dsh 自己的 TUI/Web 里挂，ACP 下执行不了；BaoCode 也不替用户改写消息，`/name` 字面照发。
 
+### 5.16 选项提问（`ask_user_question`）
+
+目标：dsh 需要用户拍板时，复用 Claude Code 的那张 `InteractionPanel`，而不是让模型在正文里列问题（用户故事 34）。
+
+- **为什么不能直接用 dsh 自带的工具**：ACP profile 的 `dsh-base` 挂了 `user-questions` 服务，但 answerer 只在 web 客户端（F31）；`dsh-tool-ask-user` 不在 ACP bundle 里，模型根本没有这个工具。
+- **为什么不用 ACP 的 `mcpServers` 挂一个 app 内 MCP server**：协议上可行（`mcpCapabilities.http`），但 dsh 的 MCP 客户端对单次 `tools/call` 有 60 s 硬超时，ACP 未暴露 `toolCallTimeoutMs`，而"等用户选"天然会超过一分钟（F31）。所以采用 dsh 的**原生工具通道**。
+- **接法**：补丁 `insert` 两个条目——`baocode-ask`（`@deepseek-ai/dsh-tool-ask-user`）与 `baocode-ask-bridge`（BaoCode 写的 `ask_bridge.mjs`，`file://` 绝对 URL）。补丁只在**用户在电脑前**时插（`KernelWorkspace.approvesAll` 为 true 的 bot 会话不插），端点起不来也不插。
+- **桥**：`ctx.on('user-questions/request')` 里 POST 问题到 `http://127.0.0.1:<随机端口>/questions`，随后每 300 ms 轮询；端点只认 `Authorization: Bearer <本次对话的随机 token>`；token 与 URL 走 dsh 的环境变量 `BAOCODE_ASK_URL` / `BAOCODE_ASK_TOKEN`，**不进补丁**。轮次取消时 `request.signal` 触发一次 cancel，插件停止轮询。
+- **面板映射**：`questions[].id/question/header/options/multi_select` → `QuestionRequest`（`allowMultiple = multi_select`，`allowOther = true`）；标题固定 `DSH has a question`。
+- **答案映射**：命中选项标签 → `selected`；用户自己写的（Other）→ `custom`；面板跳过 → 空 `selected`（dsh 读作 skipped，不是取消）。轮次结束、release、进程退出、dispose → 待答问题标 `cancelled` 并发 `InteractionResolved`（面板不悬空）。
+- **测试**：端点/插件写入用纯 Dart + 真 loopback；内核线形用 mock 传输 + 真 HTTP；真实 dsh 一条 `-t dsh-e2e` 冒烟（真模型一次，不进 CI）。
+
 ## 6. Testing Decisions
 
 缝的形状（评审修正后）：**以构造函数注入传输工厂为主缝**，其余都是既有测试惯例，不新增抽象：
@@ -321,6 +336,9 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - `dsh_kernel_test.dart`：握手、`session/new` 的 `[]` 与 cwd、模型分组、无 effort、contextWindow 初值、健康失败两种、版本提醒、选项在首条消息后收敛；`prepare()` 后 `commands` 来自 `$DSH_HOME/skills`、带 `SKILL.md` 路径、再次 `prepare()` 收录新增项
 - `dsh_turn_test.dart`：TurnStarted/用户条目/TurnEnded 顺序与 id、整条文本、思考、工具卡成功/失败、usage、-32603 也发 TurnEnded、cancel
 - `dsh_approval_test.dart`：请求挂起、allow-once/reject-once/cancelled 线形、工具名与理由关联与缺失回退、迟到应答忽略
+- `dsh_question_server_test.dart`：桥插件文件写入/不重写、`file://` URL、端点 token 校验、未知问题 404
+- `dsh_kernel_test.dart`（追加）：问题 → `QuestionRequest`、面板回答的 `selected`/`custom`、跳过、release 时 `cancelled`、无人在场不插桥
+- `e2e_dsh_real_test.dart`：`-t dsh-e2e`，真实 dsh 调 `ask_user_question`，自动答 Apple，断言工具结果与回复（不进 CI）
 - `dsh_restart_test.dart`：重启后 resume 而非 new、历史与标题的读写、`message:<n>` 续号、`DshCatalog` 列项、文件账本与删除
 - `kernel_ui_test.dart`（追加）：选择器两个内核、默认 Claude、首条消息后锁定、权限档位首条消息后只剩一项、图片开关随 `supportsImages`
 - `l10n_test.dart`（追加）：三档中文标签
@@ -340,6 +358,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 | T4 | 界面闭环：可用性谓词、图片谓词、MockKernels.dsh、标题门禁 | `lib/kernel/agent_kernel.dart`、`lib/chat/chat_session.dart`、`lib/kernel/mock/mock_kernels.dart`、`lib/kernel/claude_code/claude_code_kernel.dart`（只加 `supportsImages` 与 `available` 相关）、`lib/kernel/codex/codex_kernel.dart`、`lib/workspace/workspace.dart`（标题门禁）、`test/kernel_ui_test.dart` | T2 |
 | T5 | 设置 + 文案 + main 接线 + 退出清理 | `lib/settings/pages/general_page.dart`、`lib/settings/app_settings.dart`、`lib/main.dart`、`lib/l10n/*.arb` 及生成物、`lib/chat/composer/kernel_option_text.dart`、`test/l10n_test.dart`、`test/settings/` | T1 |
 | T6 | 文档 + smoke + 跨票回归 | `docs/dsh-kernel.md`、`tool/dsh_smoke.mjs`、`test/kernel/dsh_integration_test.dart` | T3、T4、T5 |
+| T7 | 选项提问：provider + loopback 端点 + 桥插件 + 补丁/环境接线 | `lib/kernel/dsh/dsh_questions.dart`、`dsh_question_server*.dart`、`dsh_ask_bridge.dart`、`dsh_patch.dart` 的 insert、`dsh_kernel.dart` 的接线；`test/kernel/dsh_question_server_test.dart`、`dsh_kernel_test.dart`（追加）、`test/e2e_dsh_real_test.dart` | T2、T3 |
 
 并行：T1 完成后 T2 与 T5 并行；T2 完成后 T3 与 T4 并行；T6 收口。
 
@@ -352,7 +371,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - 编辑监听与 diff review
 - 远端 SSH 主机上的 dsh、多文件夹工作区里的 dsh
 - 自动安装或升级 dsh、自动安装 `dsh-gitbash-shell`
-- BaoCode 自有工具（generate_image、浏览器、远端操作、用量查询）接入 dsh：ACP 只能接外部 MCP server，进程内工具传不过去
+- BaoCode 自有工具（generate_image、浏览器、远端操作、用量查询）接入 dsh：ACP 只能接外部 MCP server，进程内工具传不过去。**选项提问是例外**（§5.16）：接的是 dsh 自己的 `ask_user_question` 与其 answerer，不是把进程内工具搬过去
 - 读 dsh 组合配置里的 `customSkillDirs`、把 dsh 的主机命令（`/compact`、`/goal` 等）搬进 BaoCode 的 `/` 菜单、skill 列表热更新
 - 改 README 宣传文案、把设计发到 GitHub Issue
 
@@ -370,6 +389,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 10. 视图切换会结束进程再 resume，回来时要重新等握手（约 6 秒）。
 11. 应用自己的提问（提交消息）每次起一次 `headless`，约 6 秒；只在那一个内核是 DSH 的项目里如此。
 12. `/` 菜单只读 dsh 的默认 skill 根：不读 `customSkillDirs`，对话开着时不热更新，下次 `prepare()` 才重读。
+13. 选项提问依赖 dsh 的内部接缝（`user-questions/request`、`dsh-tool-ask-user`），验证于 0.2.0-rc.2；dsh 改事件名/包名时工具会静默缺失。桥插件与端点只在本地，不走网络；dsh 自己跑的 shell 能读到环境里的 token，属于本机开发工具的威胁模型。
 
 ## 10. Further Notes
 

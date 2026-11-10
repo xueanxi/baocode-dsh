@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:baocode/chat/chat_models.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
+import 'package:baocode/kernel/dsh/dsh_ask_bridge.dart';
 import 'package:baocode/kernel/dsh/dsh_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_locate.dart';
 import 'package:baocode/kernel/dsh/dsh_notices.dart';
@@ -22,6 +23,10 @@ import 'package:path/path.dart' as p;
 /// process go again. Nothing is started: the transport is
 /// [MockDshTransport].
 void main() {
+  // The test binding fakes HttpClient (every request a 400). The question
+  // endpoint is a real loopback server, so these tests use the real client.
+  setUp(() => HttpOverrides.global = null);
+
   test(
     'shakes hands: the image capability, the project, and no session yet',
     () async {
@@ -56,8 +61,17 @@ void main() {
       expect(launch.patchFile, endsWith(DshPatch.fileName));
       expect(File(launch.patchFile).existsSync(), isTrue);
       // The login shell's environment, without which dsh finds no `node` or
-      // `git` when the app was started from Finder.
-      expect(launch.environment, {'PATH': '/usr/bin'});
+      // `git` when the app was started from Finder; beside it, where the
+      // answerer plugin asks (the bridge, see `dsh_ask_bridge.dart`).
+      expect(launch.environment!['PATH'], '/usr/bin');
+      final askUrl = Uri.parse(launch.environment![DshAskBridge.urlVariable]!);
+      expect(askUrl.scheme, 'http');
+      expect(askUrl.host, '127.0.0.1');
+      expect(launch.environment![DshAskBridge.tokenVariable], isNotEmpty);
+      final patch = File(launch.patchFile).readAsStringSync();
+      expect(patch, contains('- id: baocode-ask'));
+      expect(patch, contains("name: '@deepseek-ai/dsh-tool-ask-user'"));
+      expect(patch, contains(DshAskBridge.fileName));
     },
   );
 
@@ -710,6 +724,293 @@ void main() {
     expect(KernelRegistry.dsh.label, 'DSH');
     expect(KernelRegistry.dsh.description, 'DeepSeek Harness');
   });
+
+  test(
+    'a question from the bridge: the panel shows its options, and the answer '
+    'goes back in dsh\'s shape',
+    () async {
+      final dsh = _FakeDsh();
+      final kernel = dsh.kernel();
+      final events = _listen(kernel);
+      kernel.prepare();
+      await settled(() => kernel.health.status == KernelHealthStatus.ready);
+      final environment = dsh.launches.single.environment!;
+      final url = _askUrl(environment);
+
+      final created = await _post(url, environment, 'questions', {
+        'questions': [
+          {
+            'id': 'fruit',
+            'question': 'Which fruit do you want?',
+            'header': 'Fruit',
+            'options': [
+              {'label': 'Apple', 'description': 'A red one'},
+              {'label': 'Banana', 'description': 'A yellow one'},
+            ],
+          },
+        ],
+      });
+      await settled(() => events.whereType<InteractionRequested>().isNotEmpty);
+
+      final request =
+          events.whereType<InteractionRequested>().single.request
+              as QuestionRequest;
+      expect(request.title, 'DSH has a question');
+      expect(request.questions.single.prompt, 'Which fruit do you want?');
+      expect(request.questions.single.header, 'Fruit');
+      expect(
+        [for (final option in request.questions.single.options) option.label],
+        ['Apple', 'Banana'],
+      );
+      expect(request.questions.single.allowMultiple, isFalse);
+      expect(request.questions.single.allowOther, isTrue);
+
+      kernel.answer(
+        request.id,
+        QuestionAnswer([
+          ['Apple'],
+        ]),
+      );
+      final answered = await _settledPoll(
+        url,
+        environment,
+        id: created['id'] as String,
+      );
+      expect(answered['state'], 'answered');
+      expect(answered['answers'], [
+        {
+          'id': 'fruit',
+          'selected': ['Apple'],
+        },
+      ]);
+      // The panel is told it is over.
+      await settled(
+        () => events.whereType<InteractionResolved>().any(
+          (event) => event.requestId == request.id,
+        ),
+      );
+    },
+  );
+
+  test(
+    'a multi-select question stays multiple: dsh\'s `multiSelect` reaches the '
+    'panel, and every pick comes back',
+    () async {
+      final dsh = _FakeDsh();
+      final kernel = dsh.kernel();
+      final events = _listen(kernel);
+      kernel.prepare();
+      await settled(() => kernel.health.status == KernelHealthStatus.ready);
+      final environment = dsh.launches.single.environment!;
+      final url = _askUrl(environment);
+
+      // The service normalizes the tool's `multi_select` to `multiSelect`
+      // before the waterfall: this is what the bridge posts.
+      final created = await _post(url, environment, 'questions', {
+        'questions': [
+          {
+            'id': 'weekend',
+            'question': 'Which days?',
+            'multiSelect': true,
+            'options': [
+              {'label': 'Saturday'},
+              {'label': 'Sunday'},
+            ],
+          },
+        ],
+      });
+      await settled(() => events.whereType<InteractionRequested>().isNotEmpty);
+      final request =
+          events.whereType<InteractionRequested>().single.request
+              as QuestionRequest;
+      expect(request.questions.single.allowMultiple, isTrue);
+
+      kernel.answer(
+        request.id,
+        QuestionAnswer([
+          ['Saturday', 'Sunday'],
+        ]),
+      );
+      final answered = await _settledPoll(
+        url,
+        environment,
+        id: created['id'] as String,
+      );
+      expect(answered['answers'], [
+        {
+          'id': 'weekend',
+          'selected': ['Saturday', 'Sunday'],
+        },
+      ]);
+    },
+  );
+
+  test('an answer of the user\'s own is dsh\'s custom, and a skip is empty '
+      'selections', () async {
+    final dsh = _FakeDsh();
+    final kernel = dsh.kernel();
+    final events = _listen(kernel);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+    final environment = dsh.launches.single.environment!;
+    final url = _askUrl(environment);
+
+    final created = await _post(url, environment, 'questions', {
+      'questions': [
+        {
+          'id': 'fruit',
+          'question': 'Which fruit?',
+          'options': [
+            {'label': 'Apple'},
+          ],
+        },
+      ],
+    });
+    await settled(() => events.whereType<InteractionRequested>().isNotEmpty);
+    final first =
+        events.whereType<InteractionRequested>().single.request
+            as QuestionRequest;
+    kernel.answer(
+      first.id,
+      QuestionAnswer([
+        ['Peach'],
+      ]),
+    );
+    final answered = await _settledPoll(
+      url,
+      environment,
+      id: created['id'] as String,
+    );
+    expect(answered['answers'], [
+      {'id': 'fruit', 'selected': <String>[], 'custom': 'Peach'},
+    ]);
+
+    // A second question, dismissed: answered with nothing picked, which dsh's
+    // own tool reads as skipped (not as cancelled).
+    final skipped = await _post(url, environment, 'questions', {
+      'questions': [
+        {'id': 'size', 'question': 'How big?'},
+      ],
+    });
+    await settled(() => events.whereType<InteractionRequested>().length == 2);
+    final second = events.whereType<InteractionRequested>().last.request;
+    kernel.answer(second.id, QuestionAnswer([<String>[]], skipped: true));
+    expect(
+      (await _settledPoll(
+        url,
+        environment,
+        id: skipped['id'] as String,
+      ))['answers'],
+      [
+        {'id': 'size', 'selected': <String>[]},
+      ],
+    );
+  });
+
+  test('the conversation lets go while a question waits: the bridge is told '
+      'cancelled', () async {
+    final dsh = _FakeDsh();
+    final kernel = dsh.kernel();
+    final events = _listen(kernel);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+    final environment = dsh.launches.single.environment!;
+    final url = _askUrl(environment);
+
+    final created = await _post(url, environment, 'questions', {
+      'questions': [
+        {'id': 'fruit', 'question': 'Which fruit?'},
+      ],
+    });
+    await settled(() => events.whereType<InteractionRequested>().isNotEmpty);
+
+    kernel.release();
+    final state = await _poll(url, environment, created['id'] as String);
+    expect(state['state'], 'cancelled');
+    kernel.dispose();
+  });
+
+  test('no one at the computer: no answerer in the patch, and none in the '
+      'environment', () async {
+    final dsh = _FakeDsh();
+    final kernel = dsh.kernel(
+      workspace: const KernelWorkspace(folders: [], approvesAll: true),
+    );
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+
+    final launch = dsh.launches.single;
+    expect(launch.environment, {'PATH': '/usr/bin'});
+    expect(
+      File(launch.patchFile).readAsStringSync(),
+      isNot(contains('baocode-ask')),
+    );
+  });
+}
+
+/// The endpoint the kernel's bridge asks on.
+Uri _askUrl(Map<String, String> environment) =>
+    Uri.parse(environment[DshAskBridge.urlVariable]!);
+
+/// Posts [body] to [path] on the question endpoint, as the bridge does.
+Future<Map<String, Object?>> _post(
+  Uri url,
+  Map<String, String> environment,
+  String path,
+  Map<String, Object?> body,
+) async {
+  final client = HttpClient();
+  try {
+    final request = await client.postUrl(url.resolve('/$path'));
+    request.headers.set(
+      HttpHeaders.authorizationHeader,
+      'Bearer ${environment[DshAskBridge.tokenVariable]}',
+    );
+    request.headers.contentType = ContentType.json;
+    request.write(jsonEncode(body));
+    final response = await request.close();
+    final text = await utf8.decoder.bind(response).join();
+    expect(response.statusCode, inInclusiveRange(200, 299), reason: text);
+    return (jsonDecode(text) as Map).cast<String, Object?>();
+  } finally {
+    client.close(force: true);
+  }
+}
+
+/// One poll of the question endpoint, as the bridge does.
+Future<Map<String, Object?>> _poll(
+  Uri url,
+  Map<String, String> environment,
+  String id,
+) async {
+  final client = HttpClient();
+  try {
+    final request = await client.getUrl(url.resolve('/questions/$id'));
+    request.headers.set(
+      HttpHeaders.authorizationHeader,
+      'Bearer ${environment[DshAskBridge.tokenVariable]}',
+    );
+    final response = await request.close();
+    final text = await utf8.decoder.bind(response).join();
+    return (jsonDecode(text) as Map).cast<String, Object?>();
+  } finally {
+    client.close(force: true);
+  }
+}
+
+/// Polls until the question is no longer open, as the bridge would; the
+/// kernel keeps running while it does.
+Future<Map<String, Object?>> _settledPoll(
+  Uri url,
+  Map<String, String> environment, {
+  required String id,
+}) async {
+  for (var attempt = 0; attempt < 500; attempt++) {
+    final state = await _poll(url, environment, id);
+    if (state['state'] != 'open') return state;
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+  }
+  fail('the question was never answered');
 }
 
 /// A machine's Git Bash and dsh home, for the patch that turns bash on: a
@@ -804,10 +1105,15 @@ class _FakeDsh {
     String cwd = '/project',
     Map<String, String> settings = const {},
     Map<String, String> environment = const {'PATH': '/usr/bin'},
+    KernelWorkspace? workspace,
     DshCredentialRefs? credentials,
   }) => DshKernel(
     KernelRegistry.dsh,
-    KernelContext(cwd: cwd, settings: settings),
+    KernelContext(
+      cwd: cwd,
+      settings: settings,
+      workspace: workspace == null ? null : () => workspace,
+    ),
     start: start,
     locate: locate,
     environment: () async => environment,

@@ -3,6 +3,10 @@ tags:
   # `flutter test --run-skipped -t e2e`.
   e2e:
     skip: "Runs the real Claude Code CLI"
+  # Runs the real dsh over its ACP profile (and spends a few cents): opt in
+  # with `flutter test --run-skipped -t dsh-e2e`.
+  dsh-e2e:
+    skip: "Runs the real dsh"
   # Runs the local `dart language-server` (no network, no tokens): opt in
   # with `flutter test --run-skipped -t lsp-smoke`.
   lsp-smoke:

@@ -12,10 +12,13 @@ import '../kernel_event.dart';
 import '../kernel_types.dart';
 import '../transcript.dart';
 import 'dsh_approval.dart';
+import 'dsh_ask_bridge.dart';
 import 'dsh_bash.dart';
 import 'dsh_locate.dart';
 import 'dsh_notices.dart';
 import 'dsh_patch.dart';
+import 'dsh_question_server.dart';
+import 'dsh_questions.dart';
 import 'dsh_sessions.dart';
 import 'dsh_skills.dart';
 import 'dsh_transport.dart';
@@ -26,6 +29,10 @@ typedef DshStarter = Future<DshTransport> Function(DshLaunch launch);
 
 /// The dsh on this machine, e.g. [locateDsh].
 typedef DshLocator = Future<DshInstall?> Function();
+
+/// The answerer dsh is started with: its plugin's `file://` URL (in the
+/// patch), and what the plugin is told of the endpoint (`dsh_ask_bridge.dart`).
+typedef _AskBridge = ({String plugin, Map<String, String> environment});
 
 /// A value an option dsh offers, with the heading it is listed under.
 typedef _Offer = ({
@@ -60,9 +67,11 @@ class DshKernel
     required this._locate,
     Future<Map<String, String>> Function()? environment,
     DshSessionStore? sessions,
+    DshQuestionServerStarter? questionServer,
     this._credentials,
   }) : _environment = environment ?? ClaudeEnvironment.of,
        _sessions = sessions ?? DshSessionStore.file(),
+       _questionServerStart = questionServer ?? startDshQuestionServer,
        _sessionId = _context.resume?.id,
        _title = _context.resume?.title ?? '' {
     _translator = DshTranslator(
@@ -76,6 +85,7 @@ class DshKernel
       write: _write,
     );
     _notices = DshNotices(emit: emit, nextSeq: () => nextSeq);
+    _questions = DshQuestions(emit: emit, nextSeq: () => nextSeq);
     final settings = _context.settings;
     _permission = _tierOf(settings[KernelChoiceKind.permission.name]);
     _wantedModel = settings[KernelChoiceKind.model.name];
@@ -92,6 +102,10 @@ class DshKernel
   /// process: started from Finder on macOS, the app's PATH has neither
   /// `node` nor `git` (see `DshLaunch.environment`).
   final Future<Map<String, String>> Function() _environment;
+
+  /// Where the bridge asks its questions (`dsh_question_server.dart`); a
+  /// test gives one that cannot bind, so that no socket opens under it.
+  final DshQuestionServerStarter _questionServerStart;
 
   /// The refs dsh can resolve, where a test gives its own: the preflight
   /// would otherwise look at the machine the test runs on. Null reads this
@@ -120,6 +134,13 @@ class DshKernel
   /// the conversation carries that the agent did not write.
   late final DshApprovals _approvals;
   late final DshNotices _notices;
+
+  /// `ask_user_question`, put to the same panel (see [DshQuestions]).
+  late final DshQuestions _questions;
+
+  /// Where the bridge plugin asks, once a conversation has needed it: one
+  /// endpoint per conversation, kept across dsh restarts.
+  DshQuestionServer? _questionServer;
 
   /// The three tiers dsh runs under (F22).
   static const _tiers = ['read-only', 'workspace-write', 'danger-full-access'];
@@ -369,6 +390,8 @@ class DshKernel
     // Answered while the process is still there to read it: a question left
     // open would be one the panel waits on for ever.
     _approvals.cancelOpen();
+    _questions.cancelOpen();
+    _questionServer?.cancelAll();
     if (_transport case final transport?) {
       _stopped = transport.exited.timeout(
         const Duration(seconds: 5),
@@ -392,6 +415,9 @@ class DshKernel
     _failPending('DSH stopped');
     _promptRequest = null;
     _approvals.cancelOpen();
+    _questions.cancelOpen();
+    final questions = _questionServer;
+    if (questions != null) unawaited(questions.close());
     if (_transport case final transport?) {
       // Long enough for dsh to flush and hand back what it was granted.
       _stopped = transport.exited.timeout(
@@ -447,10 +473,12 @@ class DshKernel
       // both whether there is a Git Bash to turn on and where DSH_HOME is,
       // which the patch checks the plugin against.
       environment = await _environment();
+      final bridge = await _openAskBridge();
       patchFile = await DshPatch.ensure(
         install: install,
         directory: DataDirectory.current.dshDir,
         withBash: await findGitBash(environment: environment) != null,
+        askBridge: bridge?.plugin,
         dshHome: _dshHomeOf(environment),
       );
       // Said before it starts, so that the first turn's failure is not the
@@ -462,7 +490,10 @@ class DshKernel
           install: install,
           patchFile: patchFile,
           permissionMode: _permission,
-          environment: environment,
+          environment: switch (bridge) {
+            final bridge? => {...environment, ...bridge.environment},
+            null => environment,
+          },
         ),
       );
     } on DshUnavailable catch (error) {
@@ -503,6 +534,40 @@ class DshKernel
     }
     // Let go while it was starting (the view closed): freed now.
     if (_releaseWanted) _free();
+  }
+
+  /// The answerer dsh is started with, or null where there is none: no user
+  /// at the computer (a bot's), or an endpoint that could not be made. Null
+  /// only leaves `ask_user_question` out — the conversation runs as before.
+  ///
+  /// Started before the process, because both the patch (the plugin) and its
+  /// environment (where to ask) name what it made.
+  Future<_AskBridge?> _openAskBridge() async {
+    if (_context.workspace?.call()?.approvesAll ?? false) return null;
+    try {
+      var server = _questionServer;
+      if (server == null) {
+        server = await _questionServerStart(_questions.ask);
+        _questionServer = server;
+      }
+      await server.start();
+      return (
+        plugin: await DshAskBridge.ensure(DataDirectory.current.dshDir),
+        environment: {
+          DshAskBridge.urlVariable: server.url.toString(),
+          DshAskBridge.tokenVariable: server.token,
+        },
+      );
+    } on UnsupportedError {
+      // Nowhere to listen (the web, or a kernel made without an endpoint):
+      // not worth a line in the log.
+      return null;
+    } on Object catch (error) {
+      // No endpoint, no tool: the agent asks in words, as Claude Code's does
+      // where no one is there to answer.
+      debugPrint('DSH questions: $error');
+      return null;
+    }
   }
 
   /// What a failed search for dsh says: the install it names.
@@ -767,10 +832,12 @@ class DshKernel
     _settleTurn();
   }
 
-  /// What the user answered to [requestId]: dsh's asks are approvals, and one
-  /// already answered or cancelled is ignored rather than thrown over.
+  /// What the user answered to [requestId]: dsh's asks are approvals and its
+  /// questions, and one already answered or cancelled is ignored rather than
+  /// thrown over.
   @override
   void answer(String requestId, InteractionAnswer answer) {
+    _questions.answer(requestId, answer);
     _approvals.answer(requestId, answer);
   }
 
@@ -779,6 +846,8 @@ class DshKernel
   /// leave the panel asking about a turn that is done.
   void _settleTurn() {
     _approvals.cancelOpen();
+    _questions.cancelOpen();
+    _questionServer?.cancelAll();
     if (_releaseWanted && !_translator.inFlight) release();
   }
 
@@ -892,6 +961,8 @@ class DshKernel
     _failPending('DSH exited');
     _promptRequest = null;
     _approvals.cancelOpen();
+    _questions.cancelOpen();
+    _questionServer?.cancelAll();
     if (_translator.inFlight) {
       _translator.end(
         interrupted: true,
