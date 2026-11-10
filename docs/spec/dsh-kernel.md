@@ -200,7 +200,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 | dsh | 对话事件 |
 |---|---|
 | `agent_message_chunk` | `ItemUpserted('message:<n>', AssistantTextItem(text))`（整条，不流式） |
-| `agent_thought_chunk` | `ItemUpserted('thought:<n>', ThinkingItem(text))` |
+| `agent_thought_chunk` | `ItemUpserted('thought:<n>', ThinkingItem(text))`；`seconds` 取与上一个 step 的间隔，第一段从本轮开始算（dsh 不计时） |
 | `tool_call` | `ItemUpserted(toolCallId, ToolCallItem(kind: ToolKind.command, target: title, label: title, detail: <rawInput 单行摘要>, status: running))` |
 | `tool_call_update` | 同 id：`status: succeeded/failed`，`output:` 拼 `content` 里的文本块；`kind` 恒 `other`，`ToolKind` 没有 other 成员，不为它加成员 |
 | `usage_update` | `UsageReported(ContextUsage(window: size, used: used))`，并记下 size |

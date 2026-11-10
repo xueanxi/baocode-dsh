@@ -67,10 +67,14 @@ class DshTranslator {
     required this.emit,
     required this.nextSeq,
     required this.options,
-  });
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
 
   final void Function(KernelEvent event) emit;
   final int Function() nextSeq;
+
+  /// Now, for the one time dsh leaves us to work out: a thought's.
+  final DateTime Function() _clock;
 
   /// Called with the `configOptions` dsh sends: with a new session, a
   /// resumed one, a pick of the user's, or a change of dsh's own.
@@ -82,6 +86,12 @@ class DshTranslator {
 
   String? _turn;
   DateTime? _startedAt;
+
+  /// When the step before a thought arrived: the wait since it is how long
+  /// the model thought, dsh timing nothing itself. Reset by every step, not
+  /// only by the turn, or each thought would carry the whole turn so far and
+  /// their sum (a fold's "thought 37m 44s") would be nonsense.
+  DateTime? _stepAt;
 
   /// Message and thought ids count on across turns, and across a restart of
   /// the process: dsh names neither (F8), and an id used twice would replace
@@ -130,7 +140,8 @@ class DshTranslator {
     required List<ImageAttachment> images,
   }) {
     _turn = turnId;
-    _startedAt = DateTime.now();
+    _startedAt = _clock();
+    _stepAt = _startedAt;
     emit(TurnStarted(nextSeq(), turnId));
     // Its id is the turn's: the time it took and what it spent are kept on
     // this item.
@@ -149,6 +160,7 @@ class DshTranslator {
       case 'agent_message_chunk':
         final text = _text(update['content']);
         if (text == null || text.isEmpty) return;
+        _stepAt = _clock();
         // The whole message at once: dsh commits it, and streams no tokens
         // (F8).
         emit(
@@ -159,14 +171,14 @@ class DshTranslator {
           ),
         );
       case 'agent_thought_chunk':
+        // dsh times nothing: a thought's time is the wait since the step
+        // before it, in which the model was thinking. The turn's own start
+        // stands for the first.
+        final now = _clock();
+        final since = _stepAt ?? _startedAt ?? now;
+        _stepAt = now;
         final text = _text(update['content']);
         if (text == null || text.isEmpty) return;
-        // dsh times nothing: the thought is taken as the time the turn had
-        // run when it came.
-        final run = switch (_startedAt) {
-          final started? => DateTime.now().difference(started),
-          null => Duration.zero,
-        };
         emit(
           ItemUpserted(
             nextSeq(),
@@ -174,11 +186,15 @@ class DshTranslator {
             ThinkingItem(
               text: text,
               tokens: text.length,
-              seconds: math.max(1, run.inSeconds),
+              seconds: math.max(
+                1,
+                (now.difference(since).inMilliseconds / 1000).round(),
+              ),
             ),
           ),
         );
       case 'tool_call':
+        _stepAt = _clock();
         final id = '${update['toolCallId'] ?? ''}';
         if (id.isEmpty) return;
         final title = '${update['title'] ?? ''}';
@@ -209,6 +225,7 @@ class DshTranslator {
         };
         // Still running: there is no progress to show, only the end (F9).
         if (id.isEmpty || status == null) return;
+        _stepAt = _clock();
         _running.remove(id);
         final call = _tools[id];
         emit(
@@ -247,11 +264,12 @@ class DshTranslator {
     final turn = _turn;
     if (turn == null) return;
     final worked = switch (_startedAt) {
-      final started? => DateTime.now().difference(started),
+      final started? => _clock().difference(started),
       null => null,
     };
     _turn = null;
     _startedAt = null;
+    _stepAt = null;
     if (interrupted) _settleTools();
     if (error != null) {
       emit(
