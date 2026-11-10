@@ -11,6 +11,7 @@ import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
 import 'package:baocode/kernel/kernel_event.dart';
 import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/kernel_types.dart';
+import 'package:baocode/kernel/transcript.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// One turn as dsh reports it, translated: the order of what the history
@@ -238,9 +239,6 @@ void main() {
       rig.kernel.send(
         KernelTurn(id: 'turn-1', text: 'What is this?', images: [_picture()]),
       );
-      // In flight, though nothing of it is shown: a second message is refused
-      // rather than begun beside it.
-      rig.kernel.send(KernelTurn(id: 'turn-2', text: 'And this one?'));
       await rig.ended();
 
       // The turn starts first, then the message it carries — pictures and
@@ -302,7 +300,133 @@ void main() {
       expect(rig.transport.requests('session/prompt'), isEmpty);
     },
   );
+
+  test('a message sent while a turn runs waits for it, then runs', () async {
+    final rig = _Rig();
+    await rig.ready();
+    rig.transport.paused = true;
+
+    rig.kernel.send(KernelTurn(id: 'turn-1', text: 'One'));
+    await settled(() => rig.items().any((event) => event.id == 'call_1'));
+    rig.kernel.send(KernelTurn(id: 'turn-2', text: 'Two'));
+
+    // Apart from the conversation until its turn, and not given dsh while
+    // the one before it is in flight (F12).
+    expect(rig.transcript.activeTurn, 'turn-1');
+    expect(rig.transcript.indexOf('turn-2'), isNull);
+    expect([for (final (id, _) in rig.transcript.queued) id], ['turn-2']);
+    expect(rig.transport.requests('session/prompt'), hasLength(1));
+
+    rig.transport.resume();
+    await settled(() => rig.transcript.activeTurn == 'turn-2');
+    // Taken up after what the turn before it said.
+    expect(rig.transcript.queued, isEmpty);
+    expect(rig.transcript.indexOf('turn-2'), isNotNull);
+    expect(
+      [for (final start in rig.events.whereType<TurnStarted>()) start.turnId],
+      ['turn-1', 'turn-2'],
+    );
+    final prompts = rig.transport.requests('session/prompt');
+    expect(prompts, hasLength(2));
+    expect(((prompts.last['params'] as Map)['prompt'] as List).single, {
+      'type': 'text',
+      'text': 'Two',
+    });
+
+    rig.transport.resume();
+    await rig.ended(turns: 2);
+    expect(rig.transcript.queued, isEmpty);
+  });
+
+  test(
+    'a queued message can be taken back or moved before those ahead',
+    () async {
+      final rig = _Rig();
+      await rig.ready();
+      rig.transport.paused = true;
+      rig.kernel.send(KernelTurn(id: 'turn-1', text: 'One'));
+      await settled(() => rig.items().any((event) => event.id == 'call_1'));
+      rig.kernel
+        ..send(KernelTurn(id: 'turn-2', text: 'Two'))
+        ..send(KernelTurn(id: 'turn-3', text: 'Three'))
+        ..send(KernelTurn(id: 'turn-4', text: 'Four'));
+
+      List<String> queued() => [
+        for (final (id, _) in rig.transcript.queued) id,
+      ];
+      expect(queued(), ['turn-2', 'turn-3', 'turn-4']);
+
+      expect(await rig.kernel.cancelQueued('turn-3'), isTrue);
+      expect(queued(), ['turn-2', 'turn-4']);
+      // One already running is not queued to take back.
+      expect(await rig.kernel.cancelQueued('turn-1'), isFalse);
+
+      rig.kernel.moveQueued('turn-4', 0);
+      expect(queued(), ['turn-4', 'turn-2']);
+
+      // The order moved is the order dsh is given, once the turn before ends.
+      rig.transport.resume();
+      await settled(() => rig.transcript.activeTurn == 'turn-4');
+      rig.transport.resume();
+      await settled(() => rig.transcript.activeTurn == 'turn-2');
+      rig.transport.resume();
+      await rig.ended(turns: 3);
+      expect(_prompts(rig), ['One', 'Four', 'Two']);
+    },
+  );
+
+  test(
+    'a message sent now while the session is being made waits for it',
+    () async {
+      final rig = _Rig();
+      await rig.ready();
+
+      rig.kernel
+        ..send(KernelTurn(id: 'turn-1', text: 'One'))
+        ..send(KernelTurn(id: 'turn-2', text: 'Two'))
+        // The first prompt is not at dsh yet: its session is still being made.
+        ..sendQueuedNow('turn-2');
+
+      await rig.ended(turns: 2);
+
+      // One session for both, and the first turn never reached dsh.
+      expect(rig.transport.requests('session/new'), hasLength(1));
+      expect(_prompts(rig), ['Two']);
+    },
+  );
+
+  test('a queued message sent now stops the turn running for it', () async {
+    final rig = _Rig();
+    await rig.ready();
+    rig.transport.paused = true;
+    rig.kernel.send(KernelTurn(id: 'turn-1', text: 'One'));
+    await settled(() => rig.items().any((event) => event.id == 'call_1'));
+    rig.kernel
+      ..send(KernelTurn(id: 'turn-2', text: 'Two'))
+      ..send(KernelTurn(id: 'turn-3', text: 'Three'));
+
+    rig.kernel.sendQueuedNow('turn-3');
+    expect(rig.transport.requests('session/cancel'), hasLength(1));
+
+    await settled(() => rig.transcript.activeTurn == 'turn-3');
+    // The one stopped ended there; those behind it keep their order.
+    expect(rig.events.whereType<TurnEnded>().single.interrupted, isTrue);
+    expect([for (final (id, _) in rig.transcript.queued) id], ['turn-2']);
+
+    rig.transport.resume();
+    await settled(() => rig.transcript.activeTurn == 'turn-2');
+    rig.transport.resume();
+    await rig.ended(turns: 3);
+    expect(_prompts(rig), ['One', 'Three', 'Two']);
+  });
 }
+
+/// The texts of the prompts dsh was given, in order.
+List<String> _prompts(_Rig rig) => [
+  for (final request in rig.transport.requests('session/prompt'))
+    for (final block in ((request['params'] as Map)['prompt'] as List))
+      '${(block as Map)['text']}',
+];
 
 /// A kernel on a mock process, and what it reported: the conversation's
 /// events, without the changers of its own state.
@@ -331,9 +455,11 @@ class _Rig {
   )..events.listen(_receive);
 
   final List<KernelEvent> events = [];
+  final Transcript transcript = Transcript();
   late MockDshTransport transport;
 
   void _receive(KernelEvent event) {
+    transcript.apply(event);
     if (event is! KernelInfoChanged) events.add(event);
   }
 

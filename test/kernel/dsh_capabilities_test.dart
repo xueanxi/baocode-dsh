@@ -1,5 +1,6 @@
 import 'package:baocode/chat/chat_session.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
+import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
 import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/mock/mock_kernels.dart';
 import 'package:baocode/workspace/agent_title.dart' show askedText;
@@ -90,6 +91,41 @@ void main() {
     });
   });
 
+  group('messages sent while the agent works', () {
+    test('wait for the turn running, then run in order', () async {
+      final transport = MockDshTransport()..paused = true;
+      final session = ChatSession(
+        kernel: MockKernels.dshOn(transport),
+        historyCount: 0,
+      );
+      addTearDown(session.dispose);
+      session.attach();
+
+      session.send(const ComposerMessage(text: 'first'));
+      await _awaitWhere(() => session.isStreaming, 'the first turn');
+      await _awaitWhere(() => transport.isPaused, 'the first turn held');
+      // What Claude Code has: the composer sends while the agent works,
+      // the message waiting over it until its turn.
+      expect(session.canQueue, isTrue);
+      expect(session.canSend, isTrue);
+      session.send(const ComposerMessage(text: 'second'));
+      expect([for (final (_, item) in session.queued) item.text], ['second']);
+      expect(session.isStreaming, isTrue);
+
+      transport.resume();
+      await _awaitWhere(
+        () => session.queued.isEmpty,
+        'the queued message started',
+      );
+      await _awaitWhere(() => transport.isPaused, 'the second turn held');
+      expect(session.isStreaming, isTrue);
+
+      transport.resume();
+      await _awaitWhere(() => !session.isStreaming, 'the second turn ended');
+      expect([for (final (_, item) in session.queued) item.text], isEmpty);
+    });
+  });
+
   group('pictures', () {
     test('are taken by the kernels that take them on every route', () {
       final claude = ChatSession(
@@ -144,6 +180,14 @@ void main() {
       expect(asked.last, '把输入框改得随内容增高');
     });
   });
+}
+
+/// Runs the event loop until [done] holds, giving up after a while.
+Future<void> _awaitWhere(bool Function() done, [String? reason]) async {
+  for (var turns = 0; turns < 500 && !done(); turns++) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+  }
+  expect(done(), isTrue, reason: reason ?? 'the session never got there');
 }
 
 /// [kernel], offered nowhere: a kernel another project runs on, or this

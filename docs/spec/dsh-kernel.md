@@ -1,6 +1,6 @@
 # DSH 内核：与 Claude Code 并存的第二个 agent
 
-> 状态：v3（2026-11-09，六轴评审后重写），待实现
+> 状态：v4（2026-11-10，补上消息排队），已实现
 > 范围：新增一个内核适配器；不改动 Claude Code 的既有行为（只为同一接口加一个可选的运行时谓词）
 > 依据：本机 dsh 0.2.0-rc.2 的 ACP 实测（握手、会话、审批、中断、续接、真实对话）+ 本仓库内核层/UI 的只读勘察 + 六轴（协议、内核契约、跨面、自洽、票图/测试、安全进程）评审
 
@@ -92,6 +92,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 32. 作为开发/维护者，我想让每张票的改动范围独占，能与其他票并行实现
 33. 作为用户，我想在输入框的 `/` 菜单里看到 dsh 会加载的 skill（包括我刚放进 `~/.dsh/skills` 的），选中后由 dsh 真的加载它，而不是只发一段普通文本
 34. 作为用户，我想在 dsh 需要我拍板时看到可点选的选项（而不是一段文字问题），选完它继续干活；这和 Claude Code 的 AskUserQuestion 是同一张面板
+35. 作为用户，我想在 dsh 干活时接着发下一句，它排在当前任务之后，不会因为发送按钮变灰而丢掉
 
 ## 5. Implementation Decisions
 
@@ -113,8 +114,8 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 
 ### 5.2 能力声明
 
-声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ProvidesCommands`、`ReportsContext`、`AcceptsImages`；描述符带 `catalog: DshCatalog`（见 §5.13）。
-不声明：`LoadsHistory`、fork、rewind、重命名、消息排队、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
+声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ProvidesCommands`、`ReportsContext`、`AcceptsImages`、`QueuesMessages`；描述符带 `catalog: DshCatalog`（见 §5.13）。
+不声明：`LoadsHistory`、fork、rewind、重命名、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
 
 要点：
 
@@ -122,6 +123,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 - `ReportsContext.contextWindow` 初值取补丁里的 `contextWindow: 512000`，`usage_update.size` 到达后覆盖。
 - `AcceptsImages.supportsImages` 取 `initialize.promptCapabilities.image`（本设计的补丁下为 true）；为 false 时，发送前剥掉图片并发一条 warning 提示。
 - `SelectsPermission` 是内核自己的 `_Choice` 实现（不用 `LocalChoice`，因为 `LocalChoice.select` 会立刻改 `selected`）：首条消息之前三档可选，之后 `options` 只保留当前项（选择器自然只剩一项）。
+- `QueuesMessages` 是**适配器自己的队列**，不是 dsh 的能力：dsh 一次只收一个 prompt（F12），所以工作中发来的消息由内核先收下，当前轮结束后再依次发出（§5.17）。
 
 ### 5.3 启动、定位与 profile
 
@@ -215,7 +217,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - 工具名放 `ApprovalRequest.title`（`toolName` 不渲染）；理由放 `reason`，取自同 `toolCallId` 的 `rawInput.justification`；拿不到写「dsh 未提供理由」。
 - 允许→`allow-once`，拒绝→`reject-once`（拒绝时 UI 附带的文字 dsh 不要）。
 - 应答与取消都要发 `InteractionResolved`；本地取消本轮时对未决审批回 `{outcome:{outcome:'cancelled'}}`。
-- 本机串行化 prompt：内核在上一轮未结束时不再发 `session/prompt`（dsh 会 `-32602`）。
+- 本机串行化 prompt：内核在上一轮未结束时不再发 `session/prompt`（dsh 会 `-32602`）；这期间发来的消息进内核的队列，见 §5.17。
 
 ### 5.7 权限三档（选定后锁定）
 
@@ -317,6 +319,17 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - **答案映射**：命中选项标签 → `selected`；用户自己写的（Other）→ `custom`；面板跳过 → 空 `selected`（dsh 读作 skipped，不是取消）。轮次结束、release、进程退出、dispose → 待答问题标 `cancelled` 并发 `InteractionResolved`（面板不悬空）。
 - **测试**：端点/插件写入用纯 Dart + 真 loopback；内核线形用 mock 传输 + 真 HTTP；真实 dsh 一条 `-t dsh-e2e` 冒烟（真模型一次，不进 CI）。
 
+### 5.17 工作中发送的消息（排队）
+
+目标：dsh 干活时，用户能像在 Claude Code 下一样接着发下一句，而不是发送按钮变灰（用户故事 35）。
+
+- **为什么由适配器排队**：ACP 一次只接受一个 `session/prompt`，并发第二个是 `-32602 a prompt is already in flight`（F12）；dsh 没有“把消息塞进当前轮”的接缝，也没有自己的队列可交接。
+- **收下与显示**：一轮未结束时 `send` 不发给 dsh，而是入内核队列，并发 `ItemUpserted(id, UserMessageItem(queued: true))`：消息显示在输入框上方的队列面板里，不进入对话正文，直到被取用。
+- **依次发出**：`TurnEnded` 之后 `_settleTurn` 取队首，按正常一轮开始（`TurnStarted` + `UserMessageItem(queued: false)`），再发 `session/prompt`；因此每一句都是独立轮次，不会合并进上一轮。错误、取消、进程退出同样会触发下一句；每句仍各自有 `TurnEnded`。
+- **插入当前任务**：不实现。`chat.queuedMessages` 的 `duringTurn`（Claude Code 的“插入当前任务”）对 DSH 不生效，队列恒为 `afterTurn`；界面上可选项仍是全局设置，切换内核时行为随内核能力。
+- **撤回 / 立即发送 / 移动**：`cancelQueued` 只从本地队列删除并发 `ItemRemoved`；`moveQueued` 重排并发 `QueueReordered`；`sendQueuedNow` 把目标移到队首，再 `session/cancel` 当前轮（prompt 以 `cancelled` 收尾），当前轮结束后目标先发。当前轮还没到 dsh（会话正在建）时，它在本地结束，目标等同一个 `session/new` 结果，不会建出两个会话。
+- **release**：只要队列非空，进程不释放；全部发完后才按 `_releaseWanted` 释放。
+
 ## 6. Testing Decisions
 
 缝的形状（评审修正后）：**以构造函数注入传输工厂为主缝**，其余都是既有测试惯例，不新增抽象：
@@ -335,13 +348,13 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - `dsh_profile_test.dart` / `dsh_locator_test.dart`：补丁两行条件、版本头、重建、定位顺序、平台根、`~` 展开、两段式设置值
 - `dsh/skills_test.dart`：frontmatter（引号、折叠块、非法布尔、旧键、`user-invocable: false`、无效名字）、项目根（最近 `.git`）、rank 去重（项目盖过用户）、`DSH_HOME` 覆盖、没有 `SKILL.md` 的目录
 - `dsh_kernel_test.dart`：握手、`session/new` 的 `[]` 与 cwd、模型分组、无 effort、contextWindow 初值、健康失败两种、版本提醒、选项在首条消息后收敛；`prepare()` 后 `commands` 来自 `$DSH_HOME/skills`、带 `SKILL.md` 路径、再次 `prepare()` 收录新增项
-- `dsh_turn_test.dart`：TurnStarted/用户条目/TurnEnded 顺序与 id、整条文本、思考、工具卡成功/失败、usage、-32603 也发 TurnEnded、cancel
+- `dsh_turn_test.dart`：TurnStarted/用户条目/TurnEnded 顺序与 id、整条文本、思考、工具卡成功/失败、usage、-32603 也发 TurnEnded、cancel；排队（轮次中发送→当前轮后依次发、撤回、重排、立即发送、会话创建中立即发送只建一个会话）
 - `dsh_approval_test.dart`：请求挂起、allow-once/reject-once/cancelled 线形、工具名与理由关联与缺失回退、迟到应答忽略
 - `dsh_question_server_test.dart`：桥插件文件写入/不重写、`file://` URL、端点 token 校验、未知问题 404
 - `dsh_kernel_test.dart`（追加）：问题 → `QuestionRequest`、面板回答的 `selected`/`custom`、跳过、release 时 `cancelled`、无人在场不插桥
 - `e2e_dsh_real_test.dart`：`-t dsh-e2e`，真实 dsh 调 `ask_user_question`，自动答 Apple，断言工具结果与回复（不进 CI）
 - `dsh_restart_test.dart`：重启后 resume 而非 new、历史与标题的读写、`message:<n>` 续号、`DshCatalog` 列项、文件账本与删除
-- `kernel_ui_test.dart`（追加）：选择器两个内核、默认 Claude、首条消息后锁定、权限档位首条消息后只剩一项、图片开关随 `supportsImages`
+- `kernel_ui_test.dart`（追加）：选择器两个内核、默认 Claude、首条消息后锁定、权限档位首条消息后只剩一项、图片开关随 `supportsImages`；`ChatSession` 在 DSH 流式中 `canSend` 为真、消息进队列
 - `l10n_test.dart`（追加）：三档中文标签
 - `ask_test.dart`：一次性问答的 argv（headless、`--json`、任务走 stdin 的 `-`）、只取 `final` 的文本、空答案的三种说明（`turn_end` 的错误、stderr、退出码）、非事件行忽略
 - `commit_message_test.dart`（追加）：内核是 DSH 时问 dsh 并清洗回复、dsh 的错误原话上报、取消映射成取消（Claude 路径不动）
@@ -369,7 +382,8 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - 列出 dsh web 里开始的会话；用 dsh 的 `session/delete` 真删会话（本版本 ACP 没有 delete，BaoCode 的删除只删本地账本）
 - token 级流式文本
 - 会话内切换权限档位（dsh 不支持改已建会话的档位）
-- fork / rewind / 重命名 / 消息排队 / 后台任务 / MCP 管理 / 计划模式
+- fork / rewind / 重命名 / 后台任务 / MCP 管理 / 计划模式
+- 把工作中发送的消息插进当前轮（`chat.queuedMessages` 的 `duringTurn`）：ACP 一次只收一个 prompt，DSH 恒为当前轮结束后再发
 - 编辑监听与 diff review
 - 远端 SSH 主机上的 dsh、多文件夹工作区里的 dsh
 - 自动安装或升级 dsh、自动安装 `dsh-gitbash-shell`
@@ -392,6 +406,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 11. 应用自己的提问（提交消息）每次起一次 `headless`，约 6 秒；只在那一个内核是 DSH 的项目里如此。
 12. `/` 菜单只读 dsh 的默认 skill 根：不读 `customSkillDirs`，对话开着时不热更新，下次 `prepare()` 才重读。
 13. 选项提问依赖 dsh 的内部接缝（`user-questions/request`、`dsh-tool-ask-user`），验证于 0.2.0-rc.2；dsh 改事件名/包名时工具会静默缺失。桥插件与端点只在本地，不走网络；dsh 自己跑的 shell 能读到环境里的 token，属于本机开发工具的威胁模型。
+14. 工作中发送的消息只能在**当前轮结束后**依次发出：ACP 一次只收一个 prompt；设置里的“插入当前任务”对 DSH 不生效。
 
 ## 10. Further Notes
 

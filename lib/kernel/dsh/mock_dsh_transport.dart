@@ -48,6 +48,13 @@ class MockDshTransport implements DshTransport {
   /// rather than playing the turn on: the call is left running.
   bool holds = false;
 
+  /// Holds a prompt at its tool call until [resume], rather than playing the
+  /// turn on: what a message sent meanwhile has to wait for.
+  bool paused = false;
+
+  /// Whether a prompt is held at its tool call now (see [paused]).
+  bool get isPaused => _paused != null;
+
   /// Whether the process dies as it is shaken hands with: a dsh that cannot
   /// start.
   bool diesOnInitialize = false;
@@ -89,6 +96,7 @@ class MockDshTransport implements DshTransport {
       StreamController.broadcast();
   final Completer<void> _exit = Completer<void>();
   final Completer<void> _cancelled = Completer<void>();
+  Completer<void>? _paused;
 
   Object? _promptId;
 
@@ -206,6 +214,12 @@ class MockDshTransport implements DshTransport {
       await _cancelled.future;
       return;
     }
+    if (paused) {
+      // Nothing more until the test lets it go: the turn is under way, as a
+      // message sent meanwhile finds it.
+      await (_paused ??= Completer<void>()).future;
+      if (_promptId != id) return;
+    }
     _notify('tool_call_update', {
       'toolCallId': 'call_1',
       'status': toolFails ? 'failed' : 'completed',
@@ -237,7 +251,17 @@ class MockDshTransport implements DshTransport {
     _promptId = null;
     if (id == null) return;
     if (!_cancelled.isCompleted) _cancelled.complete();
+    _resumePaused();
     _respond(id, {'stopReason': 'cancelled'});
+  }
+
+  /// Lets the turn held at its tool call play on.
+  void resume() => _resumePaused();
+
+  void _resumePaused() {
+    final paused = _paused;
+    _paused = null;
+    if (paused != null && !paused.isCompleted) paused.complete();
   }
 
   /// Picks [value] for the option [configId], if it offers it.

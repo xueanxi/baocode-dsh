@@ -5,6 +5,7 @@ DSH（DeepSeek Harness）是 BaoCode 的第二个 agent 内核，与 Claude Code
 - **Claude Code 仍是默认**：新对话默认选它，它在选择器里排第一。
 - **bots 仍固定 Claude Code**（`lib/bots/bots.dart` 只认 `KernelRegistry.claudeCode.id`）。
 - **BaoCode 开过的 DSH 会话会记住**：重启后侧栏仍列出，点开能读回当时的对话；在 dsh web 里开始的会话不列（见 §5）。
+- **工作中可以接着发下一句**：消息先排在输入框上方，当前轮结束后依次发出；可撤回、重排或“立即发送”（立即发送会停掉当前轮，见 §5）。
 - DSH 只在**单目录的本地项目**里出现：多文件夹工作区（cwd 是 `<data>/workspaces/<id>`）与 SSH 远端项目里，选择器不列它（`KernelRegistry.dsh.available`）。
 
 接入方式是 `node <dsh>/lib/bin.js --profile acp --patch <补丁>`：dsh 自带的 ACP profile，JSON-RPC 2.0 over stdio。BaoCode 把六种会话更新翻译成既有的对话事件，不引入新的 UI 协议。
@@ -56,6 +57,7 @@ BAOCODE_DSH_PATH=/path/to/dsh/lib/bin.js node tool/dsh_smoke.mjs
 | 版本 | 版本从被定位包的 `package.json` 读（F3；ACP 桥自报的 `agentInfo.version` 恒为 `"0.0.1"`，不是 dsh 版本）。低于验证版本只发一条会话内提醒，仍然可用。 |
 | 图片 | 以 `initialize` 的 `promptCapabilities.image` 为准；为 false 时发送前剥掉图片并发一条警告，不会把模型没看到的图片当成已发送。握手还没回来时这条能力是「不知道」（`supportsImages` 为 false）：带图的一轮会等握手结束再决定，因此这一轮的 `TurnStarted` 会晚几秒。这在界面上是罕见路径——粘贴图片本身就要求能力已知，所以通常只出现在直接调用内核的代码里（测试、集成）。 |
 | 提示词里的 notes | `KernelTurn.notes` 不发送（dsh 没有对应通道）；`mentions` 已经包含在正文里。 |
+| 工作中发送的消息 | dsh 一次只收一个 prompt（F12），所以由内核排队，当前轮结束后再依次发出；`chat.queuedMessages` 的“插入当前任务”对 DSH 不生效（§5 第 22 条）。 |
 | Customize 页 | 是全局页、与内核无关，只作用于 Claude Code；DSH 不受它影响。 |
 | BaoCode 自有工具 | `generate_image`、浏览器、远端操作、用量查询等进程内工具传不给 dsh：ACP 只能接外部 MCP server，而本适配器固定传 `mcpServers: []`。 |
 
@@ -161,7 +163,7 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 8. **跨内核的“上次选择”按 kind 全局保存**：不同内核共用一份按 kind（model/effort/permission）记的选择；DSH 会丢弃它不认识的 id（例如 Claude 的 model id），所以切内核后可能要重选档位/模型。
 9. **用量不进 BaoCode 的账本**：`usage_update` 只用来刷新工具栏的上下文占用与窗口大小；不声明 `ReportsUsage`，设置→用量里没有 DSH 的账。
 10. **切视图回来要重新握手（约 6 秒）**：视图全关时内核释放进程，下次进入重新定位、起进程、`initialize`，再 `session/resume`。这 6 秒是 dsh 的启动时间（F20），不是卡死。
-11. 其他不做的：token 级流式、会话内切换档位、fork/rewind/重命名/消息排队/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1）。
+11. 其他不做的：token 级流式、会话内切换档位、fork/rewind/重命名/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1）。
 12. 本设计的补丁只声明 `model`，没有声明 `reasoningEffort`（F6）：dsh 不报 `reasoning_effort`，所以思考强度选择器不显示（内核实现了 `SelectsEffort`，选项为空时 UI 自然不显示）。
 13. 上下文窗口在 dsh 报告前按补丁里的 `512000` 显示（这个数只有一处：`DshPatch.contextWindow`），`usage_update.size` 到达后覆盖。
 14. 版本低于 `0.2.0-rc.2` 时只发一条 warning（每个会话一次），不阻止使用；`unknown` 版本不做比较、不提醒。
@@ -172,6 +174,7 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 19. 线程记住的内核在当前项目不可用时（例如把 DSH 对话挪进多文件夹工作区，或挪到远端项目），会话会以当前第一个可用的内核打开（通常是 Claude Code），不报错；一个都不可用时才保留原内核。这是通用的线程恢复行为（`ChatSession._availableKernel`），不是 DSH 特有。
 20. **斜杠菜单只读 dsh 的默认 skill 根**（§2 的「斜杠菜单里的 skill」）：不读用户 profile 里的 `customSkillDirs`，对话开着时也不热更新，下一次打开对话（`prepare()`）才重读。放进 `~/.dsh/skills` 的 skill，重开或重进对话即可见。
 21. 选项提问依赖 dsh 的内部接缝 `user-questions/request` 与 `dsh-tool-ask-user`（验证于 0.2.0-rc.2）。dsh 换掉这个事件名或包名时，工具会静默不在或调用失败；桥接文件随应用一起更新，不写进 `~/.dsh`。另外，dsh 的环境里有端点 token，它自己跑的 shell 命令理论上能读到并伪造一次提问（本机开发工具的威胁模型，不承诺防御）。
+22. **工作中发送的消息只能在当前轮结束后依次发出**：ACP 一次只收一个 prompt（F12），“插入当前任务”的 `duringTurn` 设置对 DSH 不生效。撤回、重排、立即发送都在 BaoCode 这一侧完成；“立即发送”会停掉当前轮，等 `session/cancel` 收尾后再发。
 
 ## 6. 协议映射
 
@@ -190,6 +193,7 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 | `usage_update` | `UsageReported(ContextUsage(window: size, used: used))`；窗口变化时补一条 `KernelInfoChanged` |
 | `config_option_update` | 重建模型/思考强度选项并 `emitInfoChanged()` |
 | `session/prompt` 的 `{stopReason}` | `TurnEnded`；`cancelled` → `interrupted: true`（F13） |
+| （客户端）工作中发送的消息 | 不发给 dsh：先 `ItemUpserted(id, UserMessageItem(queued: true))` 进队列面板；`TurnEnded` 后取队首，按正常一轮发 `session/prompt` |
 | JSON-RPC 错误（如 `-32603`） | 先 `ItemUpserted('error:<turnId>', NoticeItem(error, 文本))`，再 `TurnEnded(interrupted: true)`；健康态保持 `ready`（F12） |
 | `session/request_permission` | `InteractionRequested(ApprovalRequest)`；应答后 `InteractionResolved`（F10） |
 | `user-questions/request`（桥插件） | 插件 POST 到本机 `/questions` → `InteractionRequested(QuestionRequest)`；应答后插件轮询到 `{answers:[{id, selected, custom?}]}` → `InteractionResolved`；轮次结束/进程退出 → `cancelled`（§4.1） |
@@ -209,7 +213,7 @@ TurnEnded(turnId, interrupted:, worked:)
 - 出错文本优先取 `data.details`，去掉 dsh 的 `turn failed:` 前缀；错误是本轮的，不是内核的，健康态不变。
 - 取消：`session/cancel` 是通知、不回应答（F14），prompt 以 `cancelled` 收尾；prompt 还没发出去时在本地直接结束。被中断时仍在 running 的工具卡会补成 `failed`，不会一直转圈。
 - 事件 `seq` 单调递增，重启进程后延续，不复位。
-- 一次只发一个 prompt：上一轮未结束时不再发（dsh 会 `-32602`）；同一个 `turnId` 只跑一次。
+- 一次只发一个 prompt：上一轮未结束时不再发（dsh 会 `-32602`）；这期间用户发的消息进内核队列，等当前轮结束后依次发（§5 第 22 条）。同一个 `turnId` 只跑一次。
 - 模型选项按 provider 分组，值是 `JSON.stringify([provider, model])` 的不透明串（F6）。选择走 `session/set_config_option`，dsh 拒绝时以它返回的 `currentValue` 为准。
 - 没有命令面：`initialize` 与 `session/*` 不带 `availableCommands`，dsh 也从不发 `available_commands_update`（F30）。`/` 菜单里的 skill 是内核读 dsh 的 skill 根得到的（§2），`/名字` 由 dsh 的 `agent/pre-step` 在用户消息正文里认领并加载。
 
@@ -366,6 +370,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 内核选 DSH 的项目里「生成提交消息」有结果（约 6 秒），dsh web 的会话列表**没有**多出这次提问
 - [ ] 同一个项目里输入框的「提示词增强」有结果（约 6 秒），dsh web 的会话列表**没有**多出这次提问
 - [ ] 输入框打 `/` 能看到 `~/.dsh/skills` 里的 skill（选中后发给 dsh 的是字面 `/名字`），点它的“打开详情”能打开 `SKILL.md`
+- [ ] agent 干活时再发一句：输入框可用，消息出现在输入框上方的队列里；当前轮结束后它自己开始，回复接在后面
+- [ ] 队列里的消息能撤回、拖到别的位置；“立即发送”会停掉当前轮，先发这一句
 
 ## 10. 接第三个内核
 

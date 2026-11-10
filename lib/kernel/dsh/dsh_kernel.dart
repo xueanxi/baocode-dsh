@@ -59,7 +59,8 @@ class DshKernel
         SelectsPermission,
         ProvidesCommands,
         ReportsContext,
-        AcceptsImages {
+        AcceptsImages,
+        QueuesMessages {
   DshKernel(
     this.descriptor,
     this._context, {
@@ -176,6 +177,10 @@ class DshKernel
   /// session are refused (F15).
   Future<void> _stopped = Future.value();
   Future<void>? _starting;
+
+  /// The session being made or resumed: a turn stopped before it is done
+  /// leaves the next one to wait for it rather than ask dsh for another.
+  Future<void>? _opening;
   bool _releaseWanted = false;
   bool _disposed = false;
 
@@ -185,6 +190,11 @@ class DshKernel
 
   /// The turns sent, so that one sent twice runs once.
   final Set<String> _sentTurns = {};
+
+  /// The messages sent while a turn runs, which dsh cannot take beside it
+  /// (F12): they wait here, the next first, until the turn ends. dsh has no
+  /// queue of its own to hand them to.
+  final Map<String, KernelTurn> _queued = {};
 
   /// The last lines dsh printed on stderr, kept for a failure's detail.
   String _stderr = '';
@@ -358,8 +368,13 @@ class DshKernel
     prepare();
   }
 
-  /// Whether stopping the process now would cut work short.
-  bool get _busy => _translator.inFlight || _starting != null;
+  /// Whether stopping the process now would cut work short: a turn running
+  /// or about to, or messages waiting for one to end.
+  bool get _busy =>
+      _translator.inFlight ||
+      _awaiting != null ||
+      _queued.isNotEmpty ||
+      _starting != null;
 
   @override
   void release() {
@@ -624,20 +639,37 @@ class DshKernel
 
   @override
   void send(KernelTurn turn) {
-    // A prompt already in flight is refused by dsh (F12), and one sent twice
-    // is run once. A turn waiting for the handshake is in flight too.
-    if (_sentTurns.contains(turn.id) ||
-        _translator.inFlight ||
-        _awaiting != null) {
-      return;
-    }
+    // One sent twice runs once, queued or not.
+    if (_sentTurns.contains(turn.id)) return;
     _sentTurns.add(turn.id);
     // Its first message names the session, as it names a new agent's in
     // the sidebar: kept for the next run, where dsh names no title (F17).
     if (_title.isEmpty) _title = _titleOf(turn.text);
-    // Whether pictures can go is dsh's answer at the handshake: a turn
-    // carrying them before it waits for that answer rather than guess, since
-    // the thread shows what is sent (§5.5).
+    // dsh takes one prompt at a time (F12): a message sent while one runs
+    // waits here, apart from the conversation, until that turn ends.
+    if (_translator.inFlight || _awaiting != null) {
+      _queued[turn.id] = turn;
+      emit(
+        ItemUpserted(
+          nextSeq,
+          turn.id,
+          UserMessageItem(
+            text: turn.text,
+            images: turn.images,
+            queued: true,
+            sentAt: DateTime.now(),
+          ),
+        ),
+      );
+      return;
+    }
+    _startTurnNow(turn);
+  }
+
+  /// Starts [turn] now: at once, or once the handshake says what pictures it
+  /// takes — a turn carrying them before that waits rather than guess, since
+  /// the thread shows what is sent (§5.5).
+  void _startTurnNow(KernelTurn turn) {
     if (turn.images.isNotEmpty && !_imageCapable) {
       _awaiting = turn.id;
       unawaited(_startTurn(turn));
@@ -748,8 +780,12 @@ class DshKernel
   }
 
   /// Creates the session on the first message, and resumes it after a
-  /// release: dsh keeps it on disk (F25).
-  Future<void> _openSession() async {
+  /// release: dsh keeps it on disk (F25). One at a time: a turn stopped while
+  /// the session is still being made leaves the next one to wait for it.
+  Future<void> _openSession() =>
+      _opening ??= _openSessionOnce().whenComplete(() => _opening = null);
+
+  Future<void> _openSessionOnce() async {
     if (_sessionId case final session?) {
       if (!_sessionActive) {
         await _resume(session);
@@ -807,6 +843,48 @@ class DshKernel
   }
 
   @override
+  Future<bool> cancelQueued(String turnId) async {
+    if (_queued.remove(turnId) == null) return false;
+    emit(ItemRemoved(nextSeq, turnId));
+    return true;
+  }
+
+  @override
+  void sendQueuedNow(String turnId) {
+    final turn = _queued.remove(turnId);
+    if (turn == null) return;
+    // It goes before those queued ahead of it, and the turn running is
+    // stopped for it: its answer at dsh is the one that clears the way.
+    final order = {turnId: turn, ..._queued};
+    _queued
+      ..clear()
+      ..addAll(order);
+    emit(QueueReordered(nextSeq, _queued.keys.toList()));
+    if (_translator.inFlight || _awaiting != null) {
+      cancel();
+      return;
+    }
+    // Nothing is running to stop: it can go at once.
+    _drainQueue();
+  }
+
+  @override
+  void moveQueued(String turnId, int index) {
+    if (!_queued.containsKey(turnId)) return;
+    final order = [..._queued.keys]..remove(turnId);
+    order.insert(index.clamp(0, order.length), turnId);
+    if (listEquals(order, _queued.keys.toList())) return;
+    final moved = <String, KernelTurn>{};
+    for (final id in order) {
+      moved[id] = _queued[id]!;
+    }
+    _queued
+      ..clear()
+      ..addAll(moved);
+    emit(QueueReordered(nextSeq, order));
+  }
+
+  @override
   void cancel() {
     if (_awaiting != null) {
       // Waiting for the handshake, nothing shown and nothing at dsh yet:
@@ -848,7 +926,19 @@ class DshKernel
     _approvals.cancelOpen();
     _questions.cancelOpen();
     _questionServer?.cancelAll();
-    if (_releaseWanted && !_translator.inFlight) release();
+    // The next message sent while it ran goes now, in the order it waited.
+    _drainQueue();
+    if (_releaseWanted && !_busy) release();
+  }
+
+  /// Starts the message queued next, once nothing of the turn before it is
+  /// in flight. dsh takes one prompt at a time (F12), so there is nothing to
+  /// hand it before that.
+  void _drainQueue() {
+    if (_queued.isEmpty || _translator.inFlight || _awaiting != null) return;
+    final next = _queued.entries.first;
+    _queued.remove(next.key);
+    _startTurnNow(next.value);
   }
 
   // --- Messages ---------------------------------------------------------------
