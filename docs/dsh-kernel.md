@@ -229,7 +229,7 @@ TurnEnded(turnId, interrupted:, worked:)
 
 ### 应用自己问的一句话（`ask.patch.yml`）
 
-「生成提交消息」这类**应用自己问**的一句话（不是对话的一轮），在项目内核是 DSH 时由 dsh 回答，不再走 Claude Code 的 Haiku：一次
+「生成提交消息」「输入框的提示词增强」这类**应用自己问**的一句话（不是对话的一轮），在项目内核是 DSH 时由 dsh 回答，不再走 Claude Code 的 Haiku：一次
 
 ```bash
 node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
@@ -241,6 +241,7 @@ node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
 - 进程结束整目录删掉，所以 **`~/.dsh/sessions` 里不会多出会话**——这条是硬要求，不是优化。
 - 提问的 cwd 也是那个临时目录：dsh 的沙箱根在那里，`DSH_PERMISSION_MODE=read-only` 由 BaoCode 写上——没有人守着审批，越界请求会被拒（F23）。
 - 一次约 6 秒（实测 6.3 s：起 node + 一次模型调用）；取消或超时（2 分钟）连同进程树一起结束。
+- 提问方有两个：`IdeCommitMessage`（「生成提交消息」）与 `polishComposerText`（输入框的提示词增强，`kernel:` 取会话的内核）。两者都只在项目内核是 DSH 时改问 dsh，回复的清洗、判据各自不变。
 - 内核是 Claude Code 的项目**仍然走 Claude Code 的 Haiku**；没有跨内核回退：DSH 答不上就照它的话报出来（缺 `STEPCODEV2_API_KEY` 时预检直接说，不起进程）。
 
 ## 8. 排障
@@ -272,16 +273,16 @@ node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
 
 同一条提示每个会话只说一次（`notice:credential:<ref>`）。
 
-### 生成提交消息报 dsh 的错
+### 生成提交消息或提示词增强报 dsh 的错
 
-项目内核是 DSH 时，「生成提交消息」走的是 `headless` 一次性问答（§7）。界面上是一条 error 通知，文本就是 dsh 的话：
+项目内核是 DSH 时，「生成提交消息」与输入框的「提示词增强」走的是 `headless` 一次性问答（§7）。界面上是一条 error 通知，文本就是 dsh 的话：
 
 - `DSH is not installed…`：与对话那条同样的定位问题（§8「找不到 dsh」）；
 - `dsh has no credential for STEPCODEV2_API_KEY…`：预检在起进程之前就说了，没花模型调用；
 - `dsh gave no answer (exit N).`：它退出了却没打印 `final` 事件，常见于路由/额度/模型 id 的问题——文本后面会带 dsh 的 stderr 尾部（已脱敏）；
 - `dsh did not answer within N minutes.`：超时被杀；先看 dsh web 里同一个模型能不能答。
 
-它不落会话：若在 dsh web 的会话列表里看到提交消息这类会话，说明有人把补丁的 `session-persistence-jsonl.root` 改回去了（不要手改补丁，见 §7）。
+它不落会话：若在 dsh web 的会话列表里看到提交消息、提示词增强这类会话，说明有人把补丁的 `session-persistence-jsonl.root` 改回去了（不要手改补丁，见 §7）。
 
 ### resume 失败
 
@@ -363,6 +364,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 退出应用再打开：侧栏仍有这个 DSH 对话，点开能看到刚才的消息，接着发能继续
 - [ ] 删除这个 DSH 对话后重启：侧栏不再出现（`~/.dsh` 里的 session 仍在，dsh web 还看得到）
 - [ ] 内核选 DSH 的项目里「生成提交消息」有结果（约 6 秒），dsh web 的会话列表**没有**多出这次提问
+- [ ] 同一个项目里输入框的「提示词增强」有结果（约 6 秒），dsh web 的会话列表**没有**多出这次提问
 - [ ] 输入框打 `/` 能看到 `~/.dsh/skills` 里的 skill（选中后发给 dsh 的是字面 `/名字`），点它的“打开详情”能打开 `SKILL.md`
 
 ## 10. 接第三个内核
@@ -421,4 +423,5 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - `test/kernel/dsh_bash_test.dart`：Git Bash 的发现顺序、跳过 WSL、无 git 时不跑 git、POSIX 返回 null；
 - `test/kernel_ui_test.dart`：选择器、权限档位锁定、图片开关等界面接缝；
 - `test/ide/git/commit_message_test.dart`（追加）：内核是 DSH 时问 dsh 并清洗回复、dsh 的错误原话上报、取消映射成取消；
+- `test/chat/composer_polish_test.dart`（追加）：内核是 DSH 时提示词增强问 dsh 并把回答按标记还原、dsh 的错误原话上报、Claude 路径不动；输入框把会话的内核传给增强；
 - `test/settings/dsh_page_test.dart`：`dshCode.path` 的往返。

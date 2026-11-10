@@ -10,6 +10,8 @@ import 'package:flutter/foundation.dart';
 import 'composer_embeds.dart';
 
 import '../../kernel/claude_code/claude_haiku.dart';
+import '../../kernel/dsh/dsh_ask.dart';
+import '../../kernel/kernel_registry.dart';
 import '../../models/model_providers.dart';
 
 /// `chat.composer.polish`: whether the composer has its Polish button.
@@ -156,7 +158,7 @@ const _system =
     'identifier and Markdown mark. Reply with the prompt only, nothing '
     'before or after it.';
 
-/// Asks the model; [askClaudeHaiku] when null. For tests.
+/// Asks Claude Code; [askClaudeHaiku] when null. For tests.
 @visibleForTesting
 Future<String> Function(
   String system,
@@ -167,42 +169,56 @@ Future<String> Function(
 })?
 composerPolishAsker;
 
+/// Asks dsh, where the project's kernel is DSH's; [askDsh] when null. For
+/// tests, which must not start a process.
+@visibleForTesting
+Future<String> Function(String system, String prompt)? dshPolishAsker;
+
 /// How much of the agent's last turn the model is given, at most: its end,
 /// where it comes to what the message answers.
 const composerPolishReplyLimit = 30000;
 
 /// [asked] polished by the auxiliary model (automatic: [model]'s, the
-/// session's), through Claude Code where the session runs ([location]),
-/// told what the agent said last ([reply], its last
-/// [composerPolishReplyLimit] characters) to know what [asked] refers to:
-/// the composer's new content. Throws [ComposerPolishException] when there
-/// is none, or the reply lost what it was to keep, or ran on far longer
-/// than a prompt made more specific does (written on, not polished).
+/// session's), through the agent runtime the project runs on: dsh's one
+/// question where [kernel] is DSH's, Claude Code's Haiku otherwise (where
+/// the session runs, [location]), told what the agent said last ([reply],
+/// its last [composerPolishReplyLimit] characters) to know what [asked]
+/// refers to: the composer's new content. Throws [ComposerPolishException]
+/// when there is none, or the reply lost what it was to keep, or ran on far
+/// longer than a prompt made more specific does (written on, not polished).
 Future<String> polishComposerText(
   ComposerPolishText asked, {
   String? reply,
   String? model,
   String? location,
+  String kernel = KernelRegistry.claudeCodeId,
 }) async {
-  final auxiliary = ModelProviders.current.auxiliary(model);
   final said = switch (reply?.trim()) {
     null || '' => null,
     final text when text.length > composerPolishReplyLimit =>
       '…${_tail(text, composerPolishReplyLimit)}',
     final text => text,
   };
+  final prompt = [
+    if (said != null) '<agent_reply>\n$said\n</agent_reply>\n',
+    '<message>\n${asked.text}\n</message>',
+  ].join('\n');
   final String answer;
   try {
-    answer = await (composerPolishAsker ?? askClaudeHaiku)(
-      _system,
-      [
-        if (said != null) '<agent_reply>\n$said\n</agent_reply>\n',
-        '<message>\n${asked.text}\n</message>',
-      ].join('\n'),
-      model: auxiliary.model,
-      exact: auxiliary.exact,
-      location: location,
-    );
+    if (kernel == KernelRegistry.dshId) {
+      answer = await (dshPolishAsker ?? askDsh)(_system, prompt);
+    } else {
+      final auxiliary = ModelProviders.current.auxiliary(model);
+      answer = await (composerPolishAsker ?? askClaudeHaiku)(
+        _system,
+        prompt,
+        model: auxiliary.model,
+        exact: auxiliary.exact,
+        location: location,
+      );
+    }
+  } on DshAskCancelled {
+    throw const ComposerPolishException();
   } on Object catch (error) {
     throw ComposerPolishException('$error');
   }

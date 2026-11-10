@@ -7,6 +7,9 @@ import 'package:baocode/chat/composer/composer_controller.dart';
 import 'package:baocode/chat/composer/composer_embeds.dart';
 import 'package:baocode/chat/composer/composer_polish.dart';
 import 'package:baocode/ide/ide_hover.dart';
+import 'package:baocode/kernel/agent_kernel.dart' show KernelDescriptor;
+import 'package:baocode/kernel/dsh/dsh_ask.dart';
+import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/l10n/l10n.dart';
 import 'package:baocode/theme/app_theme.dart';
 import 'package:flutter/material.dart';
@@ -182,14 +185,75 @@ void main() {
     });
   });
 
+  group('the project\'s kernel', () {
+    tearDown(() {
+      composerPolishAsker = null;
+      dshPolishAsker = null;
+    });
+
+    test('dsh answers where the project runs on DSH', () async {
+      final asked = <(String, String)>[];
+      dshPolishAsker = (system, prompt) async {
+        asked.add((system, prompt));
+        return 'Fix the crash in ⟦1⟧.';
+      };
+
+      expect(
+        await polishComposerText(
+          composerPolishText('fix teh crash in `main()`'),
+          kernel: KernelRegistry.dshId,
+        ),
+        'Fix the crash in `main()`.',
+      );
+      expect(asked.single.$1, contains('better prompt'));
+      expect(asked.single.$2, '<message>\nfix teh crash in ⟦1⟧\n</message>');
+    });
+
+    test('a dsh that gives no answer is reported in its words', () async {
+      dshPolishAsker = (system, prompt) async =>
+          throw const DshAskException('dsh gave no answer (exit 0).');
+
+      await expectLater(
+        polishComposerText(
+          composerPolishText('fix it'),
+          kernel: KernelRegistry.dshId,
+        ),
+        throwsA(
+          isA<ComposerPolishException>().having(
+            (error) => error.message,
+            'message',
+            'dsh gave no answer (exit 0).',
+          ),
+        ),
+      );
+    });
+
+    test('Claude Code still answers for the other kernels', () async {
+      var claude = 0;
+      dshPolishAsker = (system, prompt) async => fail('dsh was asked');
+      composerPolishAsker =
+          (system, prompt, {model, exact = false, location}) async {
+            claude++;
+            return 'Fix it.';
+          };
+
+      expect(await polishComposerText(composerPolishText('fix it')), 'Fix it.');
+      expect(claude, 1);
+    });
+  });
+
   group('the composer', () {
     tearDown(() {
       composerPolishAsker = null;
+      dshPolishAsker = null;
       ComposerPolishSetting.current = () => true;
     });
 
-    Future<ComposerController> pumpComposer(WidgetTester tester) async {
-      final session = ChatSession(historyCount: 0);
+    Future<ComposerController> pumpComposer(
+      WidgetTester tester, {
+      KernelDescriptor? kernel,
+    }) async {
+      final session = ChatSession(historyCount: 0, kernel: kernel);
       addTearDown(session.dispose);
       await tester.pumpWidget(
         MaterialApp(
@@ -251,6 +315,30 @@ void main() {
       controller.undo();
       await tester.pump();
       expect(controller.text, before);
+    });
+
+    testWidgets('a DSH project asks dsh, not Claude Code', (tester) async {
+      var asked = 0;
+      dshPolishAsker = (system, prompt) async {
+        asked++;
+        return 'Please fix it.';
+      };
+      composerPolishAsker = (
+        system,
+        prompt, {
+        model,
+        exact = false,
+        location,
+      }) async => fail('Claude Code was asked');
+      final controller = await pumpComposer(tester, kernel: KernelRegistry.dsh);
+      controller.replace(0, 0, 'fix it');
+      await tester.pump();
+
+      await tester.tap(polishButton());
+      await tester.pumpAndSettle();
+
+      expect(asked, 1);
+      expect(controller.text, 'Please fix it.');
     });
 
     testWidgets('typed on meanwhile, the reply is not taken', (tester) async {

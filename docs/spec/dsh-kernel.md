@@ -283,15 +283,16 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - **限制**：本地历史是快照。在 dsh web 里接着说过的内容不会进入这份快照；继续对话时 dsh 自己的上下文仍是完整的，只是 BaoCode 界面看不到那几轮。
 ### 5.14 应用自己问的一句话
 
-「生成提交消息」这类**应用自己问**的请求，原来固定走 Claude Code 的 Haiku（`ideClaudeCommitMessage` → `askClaudeHaiku`）。本机 `claude.exe` 被策略按文件名静默拦截（退出码 0、零输出），于是这个功能只能报错；DSH 能跑，却没人问它。
+「生成提交消息」「输入框的提示词增强」这类**应用自己问**的请求，原来固定走 Claude Code 的 Haiku（`ideClaudeCommitMessage` / `polishComposerText` → `askClaudeHaiku`）。本机 `claude.exe` 被策略按文件名静默拦截（退出码 0、零输出），于是这两个功能只能报错；DSH 能跑，却没人问它。
 
 - **路由按内核走**：`ideCommitMessage(kernel:)` 里 `dsh` → `askDsh`，其余内核 → 原来的 Claude 路径。内核由工作台取「该项目 IDE 里那个 chat 的内核」，没有 chat 时取 `Workspace.preferredKernel`（`_commitMessageKernel`）。不改 `IdeCommitMessageModel` 的形状，SCM 输入框、提交面板、rebase/merge 弹窗的 AI 都因此一起换过去。
+- **提示词增强同一路由**：`polishComposerText(kernel:)` 同样在 `dsh` 时走 `askDsh`，其余内核仍走 `askClaudeHaiku`；输入框把 `session.kernel.id` 传进来，因此增强用的就是这条对话正在跑的内核。增强自己的标记还原与长度判据不动，只换提问的那一侧。
 - **一次性问答走 `headless`，不走 ACP**：ACP 的 `session/new` 会在 `~/.dsh` 落一个会话（F25），而这是**应用自己的**请求，不该出现在用户的会话列表里；`headless` 是 dsh 自带的一次性 profile（"answer one task and exit"）。
 - **不落会话的做法**：`DshPatch.askContent` 把 `session-persistence-jsonl.root` 指到本次运行的临时目录，并关掉 `session-title-llm`；进程退出后整目录删除（F29 实测 `~/.dsh/sessions` 不新增）。补丁每次现写（路径里有临时目录），不缓存。
 - **不给它工具的空子**：`DSH_PERMISSION_MODE=read-only`、cwd 就是临时目录，`system-prompt` 关掉 identity 与 runtime context、persona 改成"一次回答、不要工具"；即使模型仍去调工具，读到的也只是个空目录，写入会被拒（F23 的 `ask` 无人应答即拒）。
 - **解析只认 `final`**：`dshAskAnswer` 取最后一个 `final.text`；空则用 `turn_end.reason.error.message`，再退到 stderr 尾部（`DshRedact` 过），最后是 `dsh gave no answer (exit N).`。
 - **不做跨内核回退**：内核是 Claude Code 就仍问 Claude（哪怕它的 CLI 在这台机器上坏了），是 DSH 就问 DSH；失败照原话报出。跨内核偷偷换模型会让"我的提交消息是谁写的"说不清。
-- **局限**：每次约 6 秒（起 node + 一次模型调用）；远端项目与多文件夹工作区不提供 DSH，自然仍走 Claude；会话标题、提示词润色、Stash AI 这类同源调用**这次没动**，仍走 `askClaudeHaiku`。
+- **局限**：每次约 6 秒（起 node + 一次模型调用）；远端项目与多文件夹工作区不提供 DSH，自然仍走 Claude；会话标题、Stash AI 这类同源调用**这次没动**，仍走 `askClaudeHaiku`。
 
 ### 5.15 `/` 菜单里的 skill
 
@@ -344,6 +345,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - `l10n_test.dart`（追加）：三档中文标签
 - `ask_test.dart`：一次性问答的 argv（headless、`--json`、任务走 stdin 的 `-`）、只取 `final` 的文本、空答案的三种说明（`turn_end` 的错误、stderr、退出码）、非事件行忽略
 - `commit_message_test.dart`（追加）：内核是 DSH 时问 dsh 并清洗回复、dsh 的错误原话上报、取消映射成取消（Claude 路径不动）
+- `composer_polish_test.dart`（追加）：内核是 DSH 时提示词增强问 dsh 并按标记还原、dsh 的错误原话上报、Claude 路径不动、输入框传会话内核
 - `settings` 测试：`dshCode.path` 往返
 
 不跑：真实 dsh 进程、全量套件、`-t e2e`。命令：`dart format <改动文件>` → `flutter analyze --fatal-infos` → `flutter test <本票文件>`。

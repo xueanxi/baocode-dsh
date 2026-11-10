@@ -1390,6 +1390,9 @@ class ChatComposerState extends State<ChatComposer>
           reply: widget.session.lastTurnReply,
           model: widget.session.selected(KernelChoiceKind.model),
           location: widget.session.kernelContext.cwd,
+          // The project's own runtime, as its commit message is asked of:
+          // dsh answers where the session runs on it, not Claude Code.
+          kernel: widget.session.kernel.id,
         );
       } on ComposerPolishException catch (error) {
         notifications?.notify(
