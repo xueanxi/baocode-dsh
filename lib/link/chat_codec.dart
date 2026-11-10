@@ -163,6 +163,10 @@ abstract final class ChatCodec {
       // a failed call's.
       if (item.images.isNotEmpty && item.status != ToolStatus.failed)
         'images': _images(item.images),
+      // A todo step's list, so that it opens to its items when the history
+      // is read again (dsh's `todo_write` carries them in its input).
+      if (item.kind == ToolKind.todo && item.input['todos'] is List)
+        'todos': item.input['todos'],
       // Pictures under way: how many, and of what shape, for their places
       // to show as big as they will be; once its input has come.
       if (item.kind == ToolKind.image && item.input.containsKey('prompt'))
@@ -292,6 +296,7 @@ abstract final class ChatCodec {
         tool: optional('tool'),
         images: _decodeImages(json['images']),
         input: switch ((json['making'], json['browse'])) {
+          _ when json['todos'] is List => {'todos': json['todos']},
           _ when json['sticker'] is String => {'sticker': json['sticker']},
           _ when json['url'] is String => {'url': json['url']},
           (final Map<String, Object?> making, _) => {

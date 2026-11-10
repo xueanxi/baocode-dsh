@@ -82,9 +82,14 @@ class ToolCallRow extends StatelessWidget {
     _ => null,
   };
 
+  /// A todo step opens to its items even where the tool's own output says
+  /// only how the list now stands (dsh's `todo_write`), not the items.
   bool get _opens =>
       _answered == null &&
-      (results.isNotEmpty || _shown != null || images.isNotEmpty);
+      (_todos != null ||
+          results.isNotEmpty ||
+          _shown != null ||
+          images.isNotEmpty);
 
   /// The questions asked and what the user answered, once they have
   /// (AskUserQuestion): shown under it as they are, not folded in what it
@@ -395,15 +400,15 @@ class _Results extends StatelessWidget {
 /// `completed`.
 typedef TodoItem = ({String content, String status});
 
-/// The items of the todo list a call wrote (TodoWrite) or read (TaskList,
-/// from the lines it returned: `#1 [completed] Ship it`); null for another
-/// call.
+/// The items of the todo list a call wrote (TodoWrite, or dsh's
+/// `todo_write`) or read (TaskList, from the lines it returned:
+/// `#1 [completed] Ship it`); null for another call.
 List<TodoItem>? todoItems(
   String? tool,
   Map<String, Object?> input,
   String? output,
 ) => switch (tool) {
-  'TodoWrite' => [
+  'TodoWrite' || 'todo_write' => [
     for (final todo in input['todos'] as List? ?? const [])
       if (todo is Map)
         (
@@ -437,7 +442,7 @@ final _taskLine = RegExp(r'^#\S+ \[(\w+)\] (.+)$');
   final todos = todoItems(tool, input, output);
   final done = todos?.where((todo) => todo.status == 'completed').length;
   switch (tool) {
-    case 'TodoWrite':
+    case 'TodoWrite' || 'todo_write':
       if (todos == null || todos.isEmpty) return null;
       return (
         verb: s.todoCount(done!, todos.length),

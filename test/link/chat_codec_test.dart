@@ -72,6 +72,30 @@ void main() {
     );
   });
 
+  test('a todo step\'s list goes too, so it opens after a restart', () {
+    final step = roundTrip(
+      const ToolCallItem(
+        kind: ToolKind.todo,
+        tool: 'todo_write',
+        target: 'Fix it',
+        input: {
+          'todos': [
+            {'content': 'Read it', 'status': 'completed'},
+            {'content': 'Fix it', 'status': 'in_progress'},
+          ],
+        },
+      ),
+    );
+    expect(
+      (step.kind, step.tool, step.target),
+      (ToolKind.todo, 'todo_write', 'Fix it'),
+    );
+    expect(step.input['todos'], [
+      {'content': 'Read it', 'status': 'completed'},
+      {'content': 'Fix it', 'status': 'in_progress'},
+    ]);
+  });
+
   test('a browser\'s action and a turn\'s spending go too', () {
     final step =
         ChatCodec.decode(

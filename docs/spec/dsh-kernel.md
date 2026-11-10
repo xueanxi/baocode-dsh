@@ -208,8 +208,8 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 |---|---|
 | `agent_message_chunk` | `ItemUpserted('message:<n>', AssistantTextItem(text))`（整条，不流式） |
 | `agent_thought_chunk` | `ItemUpserted('thought:<n>', ThinkingItem(text))`；`seconds` 取与上一个 step 的间隔，第一段从本轮开始算（dsh 不计时） |
-| `tool_call` | `ItemUpserted(toolCallId, ToolCallItem(kind: ToolKind.command, target: title, label: title, detail: <rawInput 单行摘要>, status: running))` |
-| `tool_call_update` | 同 id：`status: succeeded/failed`，`output:` 拼 `content` 里的文本块；`kind` 恒 `other`，`ToolKind` 没有 other 成员，不为它加成员 |
+| `tool_call` | `ItemUpserted(toolCallId, ToolCallItem(...))`：`title == todo_write` 时 `kind: ToolKind.todo`、`tool: "todo_write"`、`input: rawInput`、`target: 进行中的那一项`（清单就在调用里，展开即整份列表）；其余 `kind: ToolKind.command, target: title, label: title, detail: <rawInput 单行摘要>, status: running` |
+| `tool_call_update` | 同 id：按首次 `tool_call` 的 kind/tool/input/target 重建（todo 的清单不靠 update）；`status: succeeded/failed`，`output:` 拼 `content` 里的文本块；`kind` 恒 `other`，`ToolKind` 没有 other 成员，不为它加成员 |
 | `usage_update` | `UsageReported(ContextUsage(window: size, used: used))`，并记下 size |
 | `config_option_update` | 重建选项 + `emitInfoChanged()` |
 | `session/prompt` 的 `{stopReason}` | `TurnEnded(turnId)`；`cancelled` → `interrupted: true` |

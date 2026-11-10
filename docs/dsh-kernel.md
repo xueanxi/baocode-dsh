@@ -189,8 +189,8 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 |---|---|
 | `agent_message_chunk` | `ItemUpserted('message:<n>', AssistantTextItem(整条文本))`，不流式（F8） |
 | `agent_thought_chunk` | `ItemUpserted('thought:<n>', ThinkingItem(text))`；dsh 不计时，`seconds` 取与上一个 step（思考/消息/工具开始或结束）的间隔，即这次思考前的等待；第一段从本轮开始算。不取本轮已运行的秒数——那样折线把每段累加后会远大于实际 |
-| `tool_call` | `ItemUpserted(toolCallId, ToolCallItem(kind: command, target/label: title, detail: rawInput 单行摘要, status: running))`（F9） |
-| `tool_call_update` | 同 id：`completed → succeeded`、`failed → failed`，`output` 拼 `content` 里的文本块；`kind` 恒 `other`，历史没有该成员，不新增 |
+| `tool_call` | `ItemUpserted(toolCallId, ToolCallItem(...))`：`title` 为 `todo_write` 时 `kind: todo`，`tool` 记自身名字、`input` 取 `rawInput`、`target` 取进行中的那一项（清单在调用里，不靠 `content`）；其余 `kind: command`，`target/label` 为 `title`，`detail` 是 `rawInput` 单行摘要（F9） |
+| `tool_call_update` | 同 id：按首次 `tool_call` 的 kind/tool/input/target 重建；`completed → succeeded`、`failed → failed`，`output` 拼 `content` 里的文本块；`kind` 恒 `other`，历史没有该成员，不新增 |
 | `usage_update` | `UsageReported(ContextUsage(window: size, used: used))`；窗口变化时补一条 `KernelInfoChanged` |
 | `config_option_update` | 重建模型/思考强度选项并 `emitInfoChanged()` |
 | `session/prompt` 的 `{stopReason}` | `TurnEnded`；`cancelled` → `interrupted: true`（F13） |

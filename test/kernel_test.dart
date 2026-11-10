@@ -615,6 +615,17 @@ void main() {
         object: 'List empty',
         detail: null,
       ));
+      // dsh names the same whole-list write `todo_write`.
+      expect(
+        todoStep('todo_write', {
+          'todos': [
+            {'content': 'Read it', 'status': 'completed'},
+            {'content': 'Fix it', 'status': 'in_progress'},
+            {'content': 'Test it', 'status': 'pending'},
+          ],
+        }, 'Fix it'),
+        (verb: 'Todos 1/3', object: 'Fix it', detail: null),
+      );
     });
 
     test('a subagent shows the model its messages ran on, as it runs; '

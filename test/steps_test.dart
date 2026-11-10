@@ -600,6 +600,32 @@ void main() {
       );
     });
 
+    testWidgets('a list whose tool says only what it holds still opens to '
+        'its items', (tester) async {
+      // dsh's todo_write answers "Updated todo list: …", not the list: the
+      // items are in the call alone, and are what it opens to.
+      await pumpStep(
+        tester,
+        const ToolCallItem(
+          kind: ToolKind.todo,
+          tool: 'todo_write',
+          input: {
+            'todos': [
+              {'content': 'Read it', 'status': 'completed'},
+              {'content': 'Fix it', 'status': 'in_progress'},
+              {'content': 'Test it', 'status': 'pending'},
+            ],
+          },
+          target: 'Fix it',
+        ),
+      );
+      expect(header('Todos 1/3 Fix it'), findsOneWidget);
+      await tester.tap(header('Todos 1/3 Fix it'));
+      await tester.pump();
+      expect(find.text('Read it'), findsOneWidget);
+      expect(find.text('Test it'), findsOneWidget);
+    });
+
     testWidgets('a proposed goal offers to set it, once', (tester) async {
       final set = <String>[];
       await tester.pumpWidget(

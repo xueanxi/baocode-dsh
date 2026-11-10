@@ -118,9 +118,9 @@ class DshTranslator {
     }
   }
 
-  /// Each tool call's title and detail, to show again when it ends: its
-  /// update names only its id (F9).
-  final Map<String, ({String title, String? detail})> _tools = {};
+  /// Each tool call as first seen, to show again when it ends: its update
+  /// names only its id (F9).
+  final Map<String, _ToolCall> _tools = {};
 
   /// The calls under way: one the turn is stopped in would stay running for
   /// ever, dsh sending no result for it.
@@ -198,24 +198,30 @@ class DshTranslator {
         final id = '${update['toolCallId'] ?? ''}';
         if (id.isEmpty) return;
         final title = '${update['title'] ?? ''}';
-        final detail = _oneLine(update['rawInput']);
-        _tools[id] = (title: title, detail: detail.isEmpty ? null : detail);
-        _running.add(id);
-        emit(
-          ItemUpserted(
-            nextSeq(),
-            id,
-            ToolCallItem(
-              // dsh's kind is always `other`, which the history has no
-              // member for: its calls show as commands (F9).
-              kind: ToolKind.command,
-              target: title,
-              label: title,
-              detail: detail.isEmpty ? null : detail,
-              status: ToolStatus.running,
-            ),
-          ),
+        final raw = update['rawInput'];
+        // A call's arguments as an object; the todo tool's presentation
+        // hands the list itself, so that counts as its `todos` too.
+        final input = switch (raw) {
+          final Map map => map.cast<String, Object?>(),
+          final List todos => {'todos': todos},
+          _ => const <String, Object?>{},
+        };
+        // dsh writes the whole todo list in the call itself (`todo_write`):
+        // the items are what the step shows, its line the one in progress
+        // (see todoStep). Every other call is a command (F9).
+        final todo = title.trim().toLowerCase() == 'todo_write';
+        final detail = _oneLine(raw);
+        final call = _ToolCall(
+          kind: todo ? ToolKind.todo : ToolKind.command,
+          tool: todo ? 'todo_write' : null,
+          input: todo ? input : const {},
+          target: todo ? _todoNow(input['todos']) : title,
+          label: todo ? null : title,
+          detail: todo || detail.isEmpty ? null : detail,
         );
+        _tools[id] = call;
+        _running.add(id);
+        emit(ItemUpserted(nextSeq(), id, call.item(ToolStatus.running)));
       case 'tool_call_update':
         final id = '${update['toolCallId'] ?? ''}';
         final status = switch (update['status']) {
@@ -227,19 +233,19 @@ class DshTranslator {
         if (id.isEmpty || status == null) return;
         _stepAt = _clock();
         _running.remove(id);
+        final output = _output(update['content']);
         final call = _tools[id];
         emit(
           ItemUpserted(
             nextSeq(),
             id,
-            ToolCallItem(
-              kind: ToolKind.command,
-              target: call?.title ?? '',
-              label: call?.title,
-              detail: call?.detail,
-              status: status,
-              output: _output(update['content']),
-            ),
+            call?.item(status, output: output) ??
+                ToolCallItem(
+                  kind: ToolKind.command,
+                  target: '',
+                  status: status,
+                  output: output,
+                ),
           ),
         );
       case 'usage_update':
@@ -287,20 +293,9 @@ class DshTranslator {
   /// result for them, and a card left running would spin for ever.
   void _settleTools() {
     for (final id in _running) {
-      final call = _tools[id];
-      emit(
-        ItemUpserted(
-          nextSeq(),
-          id,
-          ToolCallItem(
-            kind: ToolKind.command,
-            target: call?.title ?? '',
-            label: call?.title,
-            detail: call?.detail,
-            status: ToolStatus.failed,
-          ),
-        ),
-      );
+      if (_tools[id] case final call?) {
+        emit(ItemUpserted(nextSeq(), id, call.item(ToolStatus.failed)));
+      }
     }
     _running.clear();
   }
@@ -340,6 +335,18 @@ class DshTranslator {
     _ => '$value',
   };
 
+  /// The item in progress in the todo list a call wrote, which the step's
+  /// line shows; empty when none is.
+  static String _todoNow(Object? todos) {
+    if (todos is! List) return '';
+    for (final todo in todos) {
+      if (todo is Map && todo['status'] == 'in_progress') {
+        return '${todo['content'] ?? ''}';
+      }
+    }
+    return '';
+  }
+
   static List<Map<String, Object?>> _optionList(Object? raw) {
     final options = <Map<String, Object?>>[];
     if (raw is! List) return options;
@@ -348,6 +355,46 @@ class DshTranslator {
     }
     return options;
   }
+}
+
+/// A tool call as first seen, kept to show it again when its update arrives:
+/// that one names only its id (F9), and what a todo step shows is in the
+/// call's own input.
+class _ToolCall {
+  const _ToolCall({
+    required this.kind,
+    required this.target,
+    this.tool,
+    this.input = const {},
+    this.label,
+    this.detail,
+  });
+
+  final ToolKind kind;
+  final String target;
+
+  /// The tool's own name, for a kind each of whose tools says its own way
+  /// (see `todoStep`).
+  final String? tool;
+
+  /// What it was called with, for those.
+  final Map<String, Object?> input;
+
+  final String? label;
+  final String? detail;
+
+  /// The item to show for it, [status] as it now stands and [output] what
+  /// it returned.
+  ToolCallItem item(ToolStatus status, {String? output}) => ToolCallItem(
+    kind: kind,
+    tool: tool,
+    input: input,
+    target: target,
+    label: label,
+    detail: detail,
+    status: status,
+    output: output,
+  );
 }
 
 /// [value] as a whole number: dsh's JSON numbers arrive as either kind.
