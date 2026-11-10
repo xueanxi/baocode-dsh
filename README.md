@@ -3,6 +3,8 @@
 
 **English** · [简体中文](README_CN.md) · [日本語](README_JA.md) · [Français](README_FR.md) · [Español](README_ES.md)
 
+fork from:https://github.com/baocode-dev/baocode , runs `dsh` as its agent.
+
 An awesome, easy-to-use desktop UI for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`), with a millisecond-fast IDE built in.
 
 BaoCode runs `dsh` as its agent, so it keeps working where Claude Code is unavailable or disallowed. Claude Code remains supported as a second kernel.
