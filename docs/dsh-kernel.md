@@ -67,6 +67,27 @@ BAOCODE_DSH_PATH=/path/to/dsh/lib/bin.js node tool/dsh_smoke.mjs
 
 设置非空时**只认设置**：指到不存在的文件会直接报“找不到 dsh”，不会再回退到 PATH。想恢复自动发现，把设置清空。
 
+### 斜杠菜单里的 skill
+
+在输入框打 `/`，除了 BaoCode 自己的 `btw` 与 `fork`，还列出 **dsh 会加载的 skill**。ACP 没有命令面（F30）：dsh 从不告诉客户端它有哪些 skill，所以内核读 dsh 自己会扫的那些目录，并按同一套 rank 顺序合并同名项：
+
+| rank | 来源 | 目录 |
+|---|---|---|
+| 100 | 项目 | `<项目>/.dsh/skills` |
+| 200 | 项目 | `<项目>/.agents/skills` |
+| 400 | 用户 | `$DSH_HOME/skills`（默认 `~/.dsh/skills`；跳过 `.system`） |
+| 500 | 用户 | `$DSH_AGENTS_HOME/skills`（默认 `~/.agents/skills`） |
+| 600 | dsh 自带 | `$DSH_BUNDLED_SKILL_DIR`（设了才读） |
+
+- 项目根是最近的带 `.git` 的祖先目录；一个都没有，就是项目目录本身。
+- 只列 `user-invocable` 不是 false 的；`disable-model-invocation: true` 的仍列（它只有斜杠这一个入口）。frontmatter 缺 `name`/`description`、名字不是 kebab-case、布尔值不合法，或写了 dsh 已废弃的 `userInvocable`/`modelInvocable`/`disableModelInvocation`，整条跳过——与 dsh 一致。
+- 目录 bundle（`<name>/SKILL.md`）与平铺 `<name>.md` 都认。
+- 选中后发出去的仍是字面的 `/名字`，由 dsh 在 `agent/pre-step` 里匹配并加载 `SKILL.md`（F30）；BaoCode 不替换文本，也不自己加载。
+- `/名字` 标签的“打开详情”会打开它的 `SKILL.md`：内核把路径放在 `KernelCommand.path` 上，composer 先用它，再退回 CustomizationStore（Claude Code 的 skills 在那条路里找）。
+- 列表在每次打开对话时（`prepare()`）重读，新放的 skill 下次进这个对话就能看到；对话开着时不热更新。
+- 用户在自己的 profile 补丁里写的 `customSkillDirs` 不读：那是 dsh 的组合配置，BaoCode 不解析。
+- dsh 的主机命令（`/compact`、`/goal` 等）不列：命令面只在 dsh 自己的 TUI/Web 里挂，ACP 下没有（`dsh-commands` 的 README 明说 ACP automation 不提供这个面）。
+
 ## 3. 权限三档
 
 dsh 的三个沙箱档位（`DSH_PERMISSION_MODE`，F22）：
@@ -130,6 +151,7 @@ dsh 的三个沙箱档位（`DSH_PERMISSION_MODE`，F22）：
 17. 会话的 `cwd` 是它的 workspace 边界（F5）；项目挪了位置，旧会话 resume 会因 `cwd does not match` 失败（显示为轮次错误），只能新开对话。
 18. dsh 的 `session/list` 只有 `{sessionId, cwd}`、没有标题与时间（F17），所以列表与标题来自 BaoCode 自己的账本（§2、规格 §5.13），不来自 dsh。
 19. 线程记住的内核在当前项目不可用时（例如把 DSH 对话挪进多文件夹工作区，或挪到远端项目），会话会以当前第一个可用的内核打开（通常是 Claude Code），不报错；一个都不可用时才保留原内核。这是通用的线程恢复行为（`ChatSession._availableKernel`），不是 DSH 特有。
+20. **斜杠菜单只读 dsh 的默认 skill 根**（§2 的「斜杠菜单里的 skill」）：不读用户 profile 里的 `customSkillDirs`，对话开着时也不热更新，下一次打开对话（`prepare()`）才重读。放进 `~/.dsh/skills` 的 skill，重开或重进对话即可见。
 
 ## 6. 协议映射
 
@@ -168,6 +190,7 @@ TurnEnded(turnId, interrupted:, worked:)
 - 事件 `seq` 单调递增，重启进程后延续，不复位。
 - 一次只发一个 prompt：上一轮未结束时不再发（dsh 会 `-32602`）；同一个 `turnId` 只跑一次。
 - 模型选项按 provider 分组，值是 `JSON.stringify([provider, model])` 的不透明串（F6）。选择走 `session/set_config_option`，dsh 拒绝时以它返回的 `currentValue` 为准。
+- 没有命令面：`initialize` 与 `session/*` 不带 `availableCommands`，dsh 也从不发 `available_commands_update`（F30）。`/` 菜单里的 skill 是内核读 dsh 的 skill 根得到的（§2），`/名字` 由 dsh 的 `agent/pre-step` 在用户消息正文里认领并加载。
 
 `session/resume {sessionId, cwd}` 不重放历史（F15）。错误分四种：`session is already active`（同进程，`-32602`）与 `already owned by an active write handle`（跨进程旧锁，`-32603`）可以重试——内核先 `await` 旧进程退出，再重试一次；`not resumable`（未知会话/子代理会话）与 `session cwd does not match`（cwd 不符）是致命的，显示为本轮错误。旧进程退出后跨进程 resume 成功（Windows 无锁文件，进程亡即释放）。
 
@@ -306,6 +329,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 退出应用再打开：侧栏仍有这个 DSH 对话，点开能看到刚才的消息，接着发能继续
 - [ ] 删除这个 DSH 对话后重启：侧栏不再出现（`~/.dsh` 里的 session 仍在，dsh web 还看得到）
 - [ ] 内核选 DSH 的项目里「生成提交消息」有结果（约 6 秒），dsh web 的会话列表**没有**多出这次提问
+- [ ] 输入框打 `/` 能看到 `~/.dsh/skills` 里的 skill（选中后发给 dsh 的是字面 `/名字`），点它的“打开详情”能打开 `SKILL.md`
 
 ## 10. 接第三个内核
 
@@ -334,6 +358,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 | `lib/kernel/dsh/dsh_transport.dart`、`dsh_transport_io.dart` | 子进程传输：按行 JSON-RPC、stderr 环（落库前脱敏）、退出消息、进程树收尾与登记 |
 | `lib/kernel/dsh/dsh_kernel.dart` | 适配器：握手、会话创建/续接、选项、健康、生命周期、审批接线；会话账本与历史回读的接线 |
 | `lib/kernel/dsh/dsh_sessions.dart`、`dsh_sessions_io.dart` | BaoCode 自己的会话账本与目录（`DshCatalog`）：索引、历史（`ChatCodec`）、删除；一个会话一对文件 |
+| `lib/kernel/dsh/dsh_skills.dart`、`dsh_skills_io.dart` | `/` 菜单里的 skill：按 dsh 的默认根与 rank 扫描、解析 frontmatter、合并同名；web 用 `dsh_skills_stub.dart`（没有文件系统） |
 | `lib/kernel/dsh/dsh_translator.dart` | 六种 update、prompt 结果、JSON-RPC 错误 → `KernelEvent` 与 turn 契约 |
 | `lib/kernel/dsh/dsh_approval.dart` | 审批请求/应答/取消，工具名与理由的关联 |
 | `lib/kernel/dsh/dsh_notices.dart` | 会话内提示（版本、凭据、图片）与凭据 refs 预检 |
@@ -346,8 +371,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 
 测试：
 
-- `test/kernel/dsh/`（`locate_test.dart`、`patch_test.dart`、`transport_test.dart`、`ask_test.dart`）：定位（含开头的 `~` 展开）、补丁（ACP 与一次性问答两份）、传输与问答的纯函数和临时目录测试，以及 stderr 脱敏；
-- `test/kernel/dsh_kernel_test.dart`：握手、会话时机、模型、健康、权限锁定、release/resume、能力随进程复位；
+- `test/kernel/dsh/`（`locate_test.dart`、`patch_test.dart`、`transport_test.dart`、`ask_test.dart`、`skills_test.dart`）：定位（含开头的 `~` 展开）、补丁（ACP 与一次性问答两份）、传输与问答的纯函数和临时目录测试、stderr 脱敏，以及 skill 的 frontmatter、项目根与 rank 合并；
+- `test/kernel/dsh_kernel_test.dart`：握手、会话时机、模型、健康、权限锁定、release/resume、能力随进程复位、`prepare()` 后 `/` 菜单来自 skill 根并带文件路径；
 - `test/kernel/dsh_turn_test.dart`：一轮的事件顺序（含带图时提示在同一轮内、握手前发图等握手）、文本、思考、工具、usage、错误、取消；
 - `test/kernel/dsh_approval_test.dart`：审批的挂起、三种应答线形、理由回退、迟到应答；
 - `test/kernel/dsh_integration_test.dart`：跨票回归，prepare → 首条消息建会话 → 工具+审批 → 下一轮 → 出错轮 → release → prepare/resume → dispose；

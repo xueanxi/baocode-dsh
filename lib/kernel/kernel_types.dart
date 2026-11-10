@@ -80,6 +80,7 @@ class KernelCommand {
     this.description,
     this.icon, {
     this.argumentHint = '',
+    this.path,
   });
 
   final String name;
@@ -88,6 +89,10 @@ class KernelCommand {
 
   /// What may follow it, e.g. `[low|medium|high]`.
   final String argumentHint;
+
+  /// The file behind it, where the kernel knows one (a skill's `SKILL.md`):
+  /// what the composer opens. Null for one built in.
+  final String? path;
 }
 
 /// A file the kernel offers for an `@mention`, relative to the project.

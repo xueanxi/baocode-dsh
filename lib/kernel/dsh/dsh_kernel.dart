@@ -17,6 +17,7 @@ import 'dsh_locate.dart';
 import 'dsh_notices.dart';
 import 'dsh_patch.dart';
 import 'dsh_sessions.dart';
+import 'dsh_skills.dart';
 import 'dsh_transport.dart';
 import 'dsh_translator.dart';
 
@@ -49,6 +50,7 @@ class DshKernel
         SelectsModel,
         SelectsEffort,
         SelectsPermission,
+        ProvidesCommands,
         ReportsContext,
         AcceptsImages {
   DshKernel(
@@ -199,6 +201,61 @@ class DshKernel
 
   String get _cwd => _context.cwd ?? '.';
 
+  /// The skills dsh would load for `/name` here (see [DshSkills]), read from
+  /// the files it would scan: ACP names no commands (F30), so the menu is
+  /// built from them rather than from dsh.
+  List<KernelCommand> _commands = const [];
+
+  @override
+  List<KernelCommand> get commands => _commands;
+
+  /// Reads the skills for this conversation's project, saying so when they
+  /// changed; a read that fails leaves the last list, as the menu had it.
+  Future<void> _readCommands() async {
+    if (_disposed) return;
+    final Map<String, String> environment;
+    try {
+      // As dsh is started with: DSH_HOME and DSH_AGENTS_HOME may be the login
+      // shell's, not the app's.
+      environment = await _environment();
+    } on Object catch (error) {
+      debugPrint('DSH skills not read: $error');
+      return;
+    }
+    final List<DshSkill> skills;
+    try {
+      skills = await DshSkills.discover(cwd: _cwd, environment: environment);
+    } on Object catch (error) {
+      debugPrint('DSH skills not read: $error');
+      return;
+    }
+    if (_disposed) return;
+    final commands = [
+      for (final skill in skills)
+        KernelCommand(
+          skill.name,
+          skill.description,
+          Icons.auto_awesome_outlined,
+          path: skill.path,
+        ),
+    ];
+    if (_sameCommands(commands, _commands)) return;
+    _commands = commands;
+    emitInfoChanged();
+  }
+
+  static bool _sameCommands(List<KernelCommand> a, List<KernelCommand> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].name != b[i].name ||
+          a[i].description != b[i].description ||
+          a[i].path != b[i].path) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /// The tier [id] names, or the one a new conversation starts in.
   static String _tierOf(String? id) =>
       _tiers.contains(id) ? id! : 'workspace-write';
@@ -266,6 +323,9 @@ class DshKernel
   void prepare() {
     _releaseWanted = false;
     if (_health.status == KernelHealthStatus.failed) return;
+    // With every start, so that a skill added since the last look is offered
+    // the next time the conversation is opened.
+    unawaited(_readCommands());
     unawaited(_ensureStarted().catchError((_) {}));
   }
 

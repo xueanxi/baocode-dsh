@@ -62,6 +62,53 @@ void main() {
   );
 
   test(
+    'the skills dsh would load are the / menu, and a later one joins it',
+    () async {
+      final home = Directory.systemTemp.createTempSync('dsh_skills');
+      addTearDown(() => home.deleteSync(recursive: true));
+      final skill = File(
+        p.join(home.path, '.dsh', 'skills', 'dsh-test-skill', 'SKILL.md'),
+      );
+      skill.parent.createSync(recursive: true);
+      skill.writeAsStringSync(
+        '---\n'
+        'name: dsh-test-skill\n'
+        'description: A skill from the user roots.\n'
+        '---\n',
+      );
+      final dsh = _FakeDsh();
+      // ACP names no commands, so the kernel reads the files dsh would.
+      final kernel = dsh.kernel(
+        environment: {
+          'PATH': '/usr/bin',
+          'HOME': home.path,
+          'USERPROFILE': home.path,
+        },
+      );
+      expect(kernel.commands, isEmpty);
+
+      kernel.prepare();
+      await settled(() => kernel.commands.isNotEmpty);
+      final command = kernel.commands.single;
+      expect(command.name, 'dsh-test-skill');
+      expect(command.description, 'A skill from the user roots.');
+      expect(command.path, skill.path);
+
+      File(p.join(home.path, '.dsh', 'skills', 'later.md'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          '---\nname: later\ndescription: Added later.\n---\n',
+        );
+      kernel.prepare();
+      await settled(() => kernel.commands.length == 2);
+      expect(
+        [for (final command in kernel.commands) command.name],
+        ['dsh-test-skill', 'later'],
+      );
+    },
+  );
+
+  test(
     'the Git Bash plugin, and a bash found: the patch turns bash on',
     () async {
       final machine = _bashMachine(withPlugin: true);

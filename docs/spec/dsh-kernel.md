@@ -53,6 +53,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 | F27 | read-only 档位在 Windows 上通过 PowerShell 的 ConstrainedLanguage 限制 pwsh（实测报 "Only core types are supported in this language mode"）；若装了 gitbash 插件，其执行器在 win32 是 **unconfined**，该档位不限制 bash |
 | F28 | 补丁层改不了一个已存在 id 的 `name`：`- id: bash-sandbox` + `name: dsh-gitbash-shell/shell` 被跳过（stderr：`patch: name mismatch for "bash-sandbox" (expected "@deepseek-ai/dsh-bash-sandbox", got "dsh-gitbash-shell/shell"), skipping`），因为 `bash-sandbox` 在 base 里属于官方 `@deepseek-ai/dsh-bash-sandbox`。`dsh-gitbash-shell` 0.38.5 自己的 bundle patch 已 insert `gitbash-executor`（`bashPath: ''` = 自动解析，本机解析到 `D:/tools/git/Git/bin/bash.exe`，source `path-git`），所以补丁只需 `tool-bash: disabled: false`。另：0.52.0 的 peer 要求 dsh ≥ 0.2.2-rc.1，装 0.2.0-rc.2 会被拒 |
 | F29 | 一次性问答（`--profile headless --patch … --json -`，任务走 stdin）：stdout 是逐行事件，答案在最后一个 `{"type":"final","text":…}`；`thinking` 单独一条事件，不经 `--json` 时会混进 stdout，所以必须用 `--json` 只取 `final`。`agent-default-model` 的 `config`（默认 `deepseek-official`/`deepseek-flash`）决定它的模型；`session-persistence-jsonl.config.root` 可以改会话落点（实测指到临时目录后 `~/.dsh/sessions` 不新增），指到临时目录时不再有 `session-checkpoint-policy` 的 "did not activate" 警告（`disabled: true` 会警告）；进程退出码与 `status` 的 `turn_end.reason.error.message` 说明失败（模型 id 不存在时实测 exit 1、`final.text` 空、stderr 一行 503）；本机一次问答约 6.3 s |
+| F30 | **ACP 没有命令面**：`initialize`、`session/new`、`session/*` 都不返回命令列表，dsh 0.2.0-rc.2 里也没有 `available_commands_update`/`AvailableCommand` 类型（`dsh-acp` 与全包源阅读）；web 客户端的 `skills/list` 是会话 Remote，不是 ACP 方法。但 **`/name` 作为正文发出去会被 dsh 加载**：`dsh-tool-skill` 的 `agent/pre-step` 用 `(^|\s)/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)` 扫用户消息的文本块，命中且 `user-invocable` 就注入该 skill 的 `SKILL.md`。skill 根见 `dsh-skill-filesystem`：项目 `.dsh/skills`(100)、`.agents/skills`(200)，用户 `$DSH_HOME/skills`(400，跳过 `.system`)、`$DSH_AGENTS_HOME/skills`(500)，`$DSH_BUNDLED_SKILL_DIR`(600)；项目根是最近的带 `.git` 的祖先 |
 
 ## 4. User Stories
 
@@ -88,6 +89,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 30. 作为开发者，我想在不启动真实 dsh、不花 token 的前提下用脚本化消息验证全部适配行为
 31. 作为开发者，我想有一个手动 smoke 脚本，需要时真跑一次 dsh，不进 CI
 32. 作为开发/维护者，我想让每张票的改动范围独占，能与其他票并行实现
+33. 作为用户，我想在输入框的 `/` 菜单里看到 dsh 会加载的 skill（包括我刚放进 `~/.dsh/skills` 的），选中后由 dsh 真的加载它，而不是只发一段普通文本
 
 ## 5. Implementation Decisions
 
@@ -99,6 +101,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 - **传输层**（新）：起 `node <dsh>/lib/bin.js --profile acp --patch <abs>`、按行收发 JSON-RPC、stderr 环、退出信息、Windows 进程树收尾、子进程登记。
 - **定位**（新）：登录 shell 环境 → 设置值 → PATH 垫片 → 平台 npm 全局根；输出 `node`、`bin.js`、版本、包目录。
 - **补丁生成**（新）：应用数据目录 `dsh/acp.patch.yml`，原子写，头部记版本，内容变化即重建。
+- **skill 发现**（新）：`dsh_skills*.dart` 读 dsh 的默认 skill 根，给 `/` 菜单与“打开详情”用（§5.15）。
 - **设置**（新）：`dshCode.path`（用户作用域），带解析函数与 `current` 静态缝，接入设置页与启动装配。
 - **接口增量**（唯一一处既有接口改动）：`AcceptsImages` 增加 `bool get supportsImages`；`KernelDescriptor` 增加可选的 `available` 谓词；`ChatSession.acceptsImages` 改为读谓词。Claude 返回 `true`、Codex 沿用现有行为。
 - **注册表**：增加 DSH 描述符，排在 Claude Code 之后；`available` 谓词表达「单目录 + 本机」。
@@ -107,7 +110,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 
 ### 5.2 能力声明
 
-声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ReportsContext`、`AcceptsImages`；描述符带 `catalog: DshCatalog`（见 §5.13）。
+声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ProvidesCommands`、`ReportsContext`、`AcceptsImages`；描述符带 `catalog: DshCatalog`（见 §5.13）。
 不声明：`LoadsHistory`、fork、rewind、重命名、消息排队、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
 
 要点：
@@ -287,6 +290,17 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - **不做跨内核回退**：内核是 Claude Code 就仍问 Claude（哪怕它的 CLI 在这台机器上坏了），是 DSH 就问 DSH；失败照原话报出。跨内核偷偷换模型会让"我的提交消息是谁写的"说不清。
 - **局限**：每次约 6 秒（起 node + 一次模型调用）；远端项目与多文件夹工作区不提供 DSH，自然仍走 Claude；会话标题、提示词润色、Stash AI 这类同源调用**这次没动**，仍走 `askClaudeHaiku`。
 
+### 5.15 `/` 菜单里的 skill
+
+ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加载，所以内核实现 `ProvidesCommands`，自己读 dsh 的 skill 根：
+
+- **位置**：`lib/kernel/dsh/dsh_skills.dart`（frontmatter、rank、去重）与 `dsh_skills_io.dart`（项目根、目录扫描）；web 端 `dsh_skills_stub.dart` 返回空（DSH 本来也不在 web 上提供）。
+- **根与顺序**同 `dsh-skill-filesystem` 的默认根：项目 `.dsh/skills`(100)、`.agents/skills`(200)，用户 `$DSH_HOME/skills`(400，跳过 `.system`)、`$DSH_AGENTS_HOME/skills`(500)，`$DSH_BUNDLED_SKILL_DIR`(600)；同名先到先得。项目根是最近的带 `.git` 的祖先，没有就是 cwd。`customSkillDirs` 不读——那是 dsh 的组合配置，BaoCode 不解析别人的 profile 层。
+- **frontmatter**：`name` 与 `description` 必填；`name` 匹配 `^[a-z0-9]+(?:-[a-z0-9]+)*$`；`user-invocable: false` 不列；`disable-model-invocation: true` 照列（它只有这个入口）；布尔按 dsh 的严格语法（`true/false/yes/no/on/off/1/0`），非法值整条丢弃；`userInvocable`/`modelInvocable`/`disableModelInvocation` 旧键出现即丢弃。目录 bundle（`<name>/SKILL.md`）与平铺 `<name>.md` 都认。
+- **刷新**：每次 `prepare()` 重读；列表有变化才 `emitInfoChanged()`。对话开着时不热更新（与 dsh 的 watcher 无关：菜单不是 dsh 发的）。
+- **文件**：`KernelCommand.path` 带 `SKILL.md` 的绝对路径；`ChatScreen._commandFile` 先看内核给的路径，再退回 `CustomizationStore`（Claude Code 的 skills 走那条）。
+- **不做**：dsh 的主机命令（`/compact`、`/goal` 等）不列——命令面只在 dsh 自己的 TUI/Web 里挂，ACP 下执行不了；BaoCode 也不替用户改写消息，`/name` 字面照发。
+
 ## 6. Testing Decisions
 
 缝的形状（评审修正后）：**以构造函数注入传输工厂为主缝**，其余都是既有测试惯例，不新增抽象：
@@ -303,7 +317,8 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 
 - `dsh_transport_test.dart`：按行解码、非 JSON 行进 stderr、替身脚本回显 args/cwd/env、退出信息、stderr 脱敏（`Bearer ***` / `Authorization: ***` / 长串）、`close()`、识别器正负例
 - `dsh_profile_test.dart` / `dsh_locator_test.dart`：补丁两行条件、版本头、重建、定位顺序、平台根、`~` 展开、两段式设置值
-- `dsh_kernel_test.dart`：握手、`session/new` 的 `[]` 与 cwd、模型分组、无 effort、contextWindow 初值、健康失败两种、版本提醒、选项在首条消息后收敛
+- `dsh/skills_test.dart`：frontmatter（引号、折叠块、非法布尔、旧键、`user-invocable: false`、无效名字）、项目根（最近 `.git`）、rank 去重（项目盖过用户）、`DSH_HOME` 覆盖、没有 `SKILL.md` 的目录
+- `dsh_kernel_test.dart`：握手、`session/new` 的 `[]` 与 cwd、模型分组、无 effort、contextWindow 初值、健康失败两种、版本提醒、选项在首条消息后收敛；`prepare()` 后 `commands` 来自 `$DSH_HOME/skills`、带 `SKILL.md` 路径、再次 `prepare()` 收录新增项
 - `dsh_turn_test.dart`：TurnStarted/用户条目/TurnEnded 顺序与 id、整条文本、思考、工具卡成功/失败、usage、-32603 也发 TurnEnded、cancel
 - `dsh_approval_test.dart`：请求挂起、allow-once/reject-once/cancelled 线形、工具名与理由关联与缺失回退、迟到应答忽略
 - `dsh_restart_test.dart`：重启后 resume 而非 new、历史与标题的读写、`message:<n>` 续号、`DshCatalog` 列项、文件账本与删除
@@ -338,6 +353,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - 远端 SSH 主机上的 dsh、多文件夹工作区里的 dsh
 - 自动安装或升级 dsh、自动安装 `dsh-gitbash-shell`
 - BaoCode 自有工具（generate_image、浏览器、远端操作、用量查询）接入 dsh：ACP 只能接外部 MCP server，进程内工具传不过去
+- 读 dsh 组合配置里的 `customSkillDirs`、把 dsh 的主机命令（`/compact`、`/goal` 等）搬进 BaoCode 的 `/` 菜单、skill 列表热更新
 - 改 README 宣传文案、把设计发到 GitHub Issue
 
 ## 9. 已知代价
@@ -353,6 +369,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 9. dsh 的用量不进 BaoCode 的用量账本。
 10. 视图切换会结束进程再 resume，回来时要重新等握手（约 6 秒）。
 11. 应用自己的提问（提交消息）每次起一次 `headless`，约 6 秒；只在那一个内核是 DSH 的项目里如此。
+12. `/` 菜单只读 dsh 的默认 skill 根：不读 `customSkillDirs`，对话开着时不热更新，下次 `prepare()` 才重读。
 
 ## 10. Further Notes
 
