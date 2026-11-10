@@ -12,6 +12,7 @@ import 'package:baocode/ide/ide_commands.dart';
 import 'package:baocode/ide/ide_quick_open.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
 import 'package:baocode/kernel/claude_code/claude_code_kernel.dart';
+import 'package:baocode/kernel/kernel_types.dart';
 import 'package:baocode/kernel/mock/mock_kernels.dart';
 import 'package:baocode/keybindings/default_keybindings.dart';
 import 'package:bao_editor/monaco/flutter/keybinding_entry.dart';
@@ -561,5 +562,78 @@ void main() {
       localizedKernelOption(_zh, 'codex', KernelChoiceKind.mode, other),
       same(other),
     );
+  });
+
+  test('DSH\'s permission modes are localized, the rest of its options are '
+      'not', () {
+    // The modes DSH names, by the ids it is told: English is its own, and
+    // the app's English is the same.
+    const options = [
+      KernelOption(
+        'read-only',
+        'Read-only',
+        Icons.visibility_outlined,
+        'Look and read only; on Windows shell commands are limited to '
+            'Constrained Language mode',
+      ),
+      KernelOption(
+        'workspace-write',
+        'Workspace only',
+        Icons.edit_outlined,
+        'Change project files and run commands; asked when a command goes '
+            'outside the workspace',
+      ),
+      KernelOption(
+        'danger-full-access',
+        'Unrestricted',
+        Icons.gpp_maybe_outlined,
+        'No workspace limits, and approval is never asked: a request that '
+            'would need it is rejected',
+        caution: true,
+      ),
+    ];
+    for (final option in options) {
+      final en = localizedKernelOption(
+        englishLocalizations,
+        'dsh',
+        KernelChoiceKind.permission,
+        option,
+      );
+      expect(en, option);
+      final zh = localizedKernelOption(
+        _zh,
+        'dsh',
+        KernelChoiceKind.permission,
+        option,
+      );
+      expect(zh.label, isNot(option.label));
+      expect(zh.description, isNot(option.description));
+      expect(
+        (zh.id, zh.icon, zh.caution),
+        (option.id, option.icon, option.caution),
+      );
+    }
+    expect(
+      [
+        for (final option in options)
+          localizedKernelOption(
+            _zh,
+            'dsh',
+            KernelChoiceKind.permission,
+            option,
+          ).label,
+      ],
+      ['只读', '只改工作区', '无限制'],
+    );
+    // Unlimited and never asked: those that would ask are turned down, not
+    // approved.
+    final danger = localizedKernelOption(
+      _zh,
+      'dsh',
+      KernelChoiceKind.permission,
+      options.last,
+    );
+    expect(danger.caution, isTrue);
+    expect(danger.description, contains('会被拒绝'));
   });
 }

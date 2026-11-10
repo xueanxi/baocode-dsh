@@ -484,6 +484,11 @@ class ClaudeCodeKernel
   @override
   KernelHealth get health => _health;
 
+  /// Pictures go with the message as they are: Claude Code takes them on
+  /// every route it has.
+  @override
+  bool get supportsImages => true;
+
   @override
   String? get sessionId => _sessionId;
 

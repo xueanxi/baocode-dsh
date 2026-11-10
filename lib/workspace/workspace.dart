@@ -3809,12 +3809,15 @@ class Workspace extends ChangeNotifier implements ColorThemeStorage {
   }
 
   /// A new title for [thread] by [titler], from what the user asked in it
-  /// (see [askedText]); null without [titler], or when it gives none.
+  /// (see [askedText]); null without [titler], when its kernel keeps no
+  /// title ([ChatSession.canRename], as what it was asked is not to be sent
+  /// to another kernel's model), or when it gives none.
   /// Not given to it: the title is the user's to keep, through [rename].
   Future<String?> summarizeTitle(AgentThread thread) async {
     final titler = this.titler;
     if (titler == null) return null;
     final session = thread.session;
+    if (!session.canRename) return null;
     final text = askedText(session);
     if (text.isEmpty) return null;
     return titler(

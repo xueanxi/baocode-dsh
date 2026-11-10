@@ -5673,6 +5673,42 @@ class AppLocalizationsZh extends AppLocalizations {
   String get claudePathMissing => '尚未找到：选用 Claude Code CLI 后，开始第一个对话时会自动下载。';
 
   @override
+  String get dshSettingsTitle => 'DSH';
+
+  @override
+  String get dshPathSetting => '路径';
+
+  @override
+  String get dshPathSettingDescription =>
+      '留空则自动用本机 PATH 上的 dsh，不挑版本。填入路径则固定用那一份：`lib/bin.js`，或用 `|` 分出 node 与该路径，指定用哪个 node 来跑它。历史会话在 dsh web 里查看，本内核不列；DSH 也只在单目录的本地项目里出现。（dshCode.path）';
+
+  @override
+  String get dshPathSettingHint => '自动';
+
+  @override
+  String get dshPathSettingPermissions =>
+      '权限每通对话各选一次，发出第一条消息后锁定；只有命令越出工作区时才会询问。';
+
+  @override
+  String get dshPermissionReadOnly => '只读';
+
+  @override
+  String get dshPermissionReadOnlyDetail =>
+      '只能读取与查看；Windows 上 shell 命令被限制为受限语言模式';
+
+  @override
+  String get dshPermissionWorkspaceWrite => '只改工作区';
+
+  @override
+  String get dshPermissionWorkspaceWriteDetail => '可改项目文件与执行命令；越出工作区时询问';
+
+  @override
+  String get dshPermissionFullAccess => '无限制';
+
+  @override
+  String get dshPermissionFullAccessDetail => '不受工作区限制，也不再询问：走审批通道的请求会被拒绝';
+
+  @override
   String get generalSettingsIdeWindows => 'Fast Ide 窗口';
 
   @override

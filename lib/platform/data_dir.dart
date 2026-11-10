@@ -99,6 +99,10 @@ class DataDirectory {
   /// summaries of Claude Code's sessions).
   String get cacheDir => p.join(path, 'cache');
 
+  /// The ACP patch dsh runs with, written for the dsh on this machine (see
+  /// lib/kernel/dsh/dsh_patch.dart).
+  String get dshDir => p.join(path, 'dsh');
+
   /// The pastes too long to go in a message, which it names for the agent
   /// to read instead (see paste_store.dart): kept, as the conversations
   /// that name them are.

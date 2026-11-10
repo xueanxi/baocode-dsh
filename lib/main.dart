@@ -59,6 +59,8 @@ import 'kernel/claude_code/turn_stats_stub.dart'
     if (dart.library.io) 'kernel/claude_code/turn_stats_io.dart'
     show turnStatsIn;
 import 'kernel/commit_attribution.dart';
+import 'kernel/dsh/dsh_path_setting.dart';
+import 'kernel/dsh/dsh_transport.dart';
 import 'kernel/extension_switches.dart';
 import 'kernel/prompt_suggestions.dart';
 import 'chat/composer/composer_polish.dart' show ComposerPolishSetting;
@@ -168,6 +170,7 @@ Future<void> main(List<String> arguments) async {
     watchExit(DataDirectory.current.logsDir);
   }
   unawaited(reapClaudeProcesses());
+  unawaited(reapDshProcesses());
   unawaited(reapLspProcesses());
   unawaited(reapPtyProcesses());
   AppBinding.ensureInitialized();
@@ -523,6 +526,10 @@ void followSettingsFiles(SettingsFiles files) {
   // agent starts.
   ClaudePathSetting.current = () =>
       ClaudePathSetting.parse(files.settings[ClaudePathSetting.settingKey]);
+  // Settings → General → DSH: the dsh to start, read as each agent starts.
+  // Unset, the one on the PATH.
+  DshPathSetting.current = () =>
+      DshPathSetting.parse(files.settings[DshPathSetting.settingKey]);
   // Settings → General → Claude Code: the core sessions run on (BaoCode's
   // own, or the CLI), read as each agent starts. Unset, the CLI where it
   // is installed (looked for on the app's PATH, then the shell's), else
@@ -839,10 +846,10 @@ class _BaoCodeAppState extends State<BaoCodeApp>
             lookupAppLocalizations(_locale.locale ?? AppLocale.systemLocale()),
       );
 
-  /// Quitting ends the Claude Code processes too: left alone, one would
-  /// finish its turn (subagents and all) unseen, and a resumed session would
-  /// then run beside it. Language servers end with the app as well, and the
-  /// terminals' shells are hung up, as closing their window would.
+  /// Quitting ends the Claude Code and dsh processes too: left alone, one
+  /// would finish its turn (subagents and all) unseen, and a resumed session
+  /// would then run beside it. Language servers end with the app as well, and
+  /// the terminals' shells are hung up, as closing their window would.
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(
     onExitRequested: () async {
       appEvent('app', 'quit requested');
@@ -863,6 +870,7 @@ class _BaoCodeAppState extends State<BaoCodeApp>
       }
       await Future.wait([
         stopClaudeProcesses(),
+        stopDshProcesses(),
         RemoteClaudeTransport.stopAll(),
         stopModelProxy(),
         stopLspProcesses(),

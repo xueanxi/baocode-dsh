@@ -151,8 +151,24 @@ class ChatSession extends ChangeNotifier implements ChatFeed {
       usage: usage ?? (historyCount > 0 ? MockConversation.usage : null),
       queuedInPlace: _queuedInPlace,
     );
-    _connect(kernel ?? this.kernels.first);
+    _connect(_availableKernel(kernel));
   }
+
+  /// [kernel], when it can work where this session does; else the first of
+  /// [kernels] that can, e.g. for a restored thread whose kernel this
+  /// project no longer runs (see [KernelDescriptor.available]).
+  KernelDescriptor _availableKernel(KernelDescriptor? kernel) {
+    if (kernel == null) return kernels.first;
+    if (kernel.available?.call(kernelContext) ?? true) return kernel;
+    return _kernelsHere.firstOrNull ?? kernel;
+  }
+
+  /// The kernels of [kernels] that can work where this session does, in
+  /// their order: those with no [KernelDescriptor.available] among them.
+  List<KernelDescriptor> get _kernelsHere => [
+    for (final descriptor in kernels)
+      if (descriptor.available?.call(kernelContext) ?? true) descriptor,
+  ];
 
   /// Whether its messages sent while the agent works show where they
   /// were sent ([KernelWorkspace.queuedInPlace]).
@@ -356,18 +372,17 @@ class ChatSession extends ChangeNotifier implements ChatFeed {
   bool get kernelLocked =>
       _transcript.length > 0 || kernelContext.resume != null;
 
-  late final List<KernelOption> _kernelOptions = [
-    for (final descriptor in kernels) descriptor.option,
-  ];
-
-  /// Null once locked, or with nothing to choose from.
+  /// Null once locked, or with fewer than two kernels it can work with.
   KernelChoice? get kernelChoice {
-    if (kernelLocked || kernels.length < 2) return null;
+    final here = _kernelsHere;
+    if (kernelLocked || here.length < 2) return null;
+    final options = [for (final descriptor in here) descriptor.option];
+    final at = here.indexWhere((descriptor) => descriptor.id == kernel.id);
     return KernelChoice(
-      options: _kernelOptions,
-      selected: _kernelOptions[kernels.indexOf(kernel)],
+      options: options,
+      selected: options[at < 0 ? 0 : at],
       onSelected: (option) =>
-          setKernel(kernels.firstWhere((k) => k.id == option.id)),
+          setKernel(here.firstWhere((k) => k.id == option.id)),
     );
   }
 
@@ -516,7 +531,12 @@ class ChatSession extends ChangeNotifier implements ChatFeed {
     _ => false,
   };
 
-  bool get acceptsImages => _kernel is AcceptsImages;
+  /// Whether a picture sent now would reach the model: only a kernel that
+  /// takes them, and that can on the route it is on.
+  bool get acceptsImages => switch (_kernel) {
+    final AcceptsImages kernel => kernel.supportsImages,
+    _ => false,
+  };
 
   /// What the user would likely send next: offered while the agent waits
   /// for them.

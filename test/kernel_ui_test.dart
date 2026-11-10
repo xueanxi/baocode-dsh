@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show base64Decode;
 import 'dart:math' show Random;
 import 'dart:ui' as ui;
 
@@ -20,6 +21,7 @@ import 'package:baocode/chat/panels/mcp_servers_panel.dart';
 import 'package:baocode/chat/panels/queue_panel.dart';
 import 'package:baocode/chat/side_panel/file_open.dart';
 import 'package:baocode/chat/composer/composer_embeds.dart';
+import 'package:baocode/chat/composer/composer_files.dart';
 import 'package:baocode/chat/widgets/activity_row.dart';
 import 'package:baocode/chat/widgets/thinking_spark.dart';
 import 'package:baocode/chat/widgets/command_step.dart';
@@ -31,6 +33,7 @@ import 'package:baocode/chat/composer/composer_images.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
 import 'package:baocode/kernel/kernel_types.dart';
 import 'package:baocode/kernel/mock/mock_kernels.dart';
+import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
 import 'package:baocode/l10n/l10n.dart';
 import 'package:baocode/main.dart';
 import 'package:baocode/sidebar/sidebar.dart';
@@ -1851,6 +1854,181 @@ void main() {
     );
     expect(subagentStatusRow(), findsNothing);
   });
+
+  testWidgets('a DSH agent is offered beside Claude Code, and keeps to itself '
+      'once it starts', (tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final workspace = Workspace(
+      projects: const [Project('baocode', '~/code/baocode')],
+      kernels: [MockKernels.claudeCode, MockKernels.dsh],
+    );
+    await tester.pumpWidget(BaoCodeApp(workspace: workspace));
+    await tester.pump();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(Sidebar),
+        matching: find.text('New Chat'),
+      ),
+    );
+    await tester.pump();
+
+    // Claude Code by default, DSH offered beside it.
+    expect(picker('Claude Code'), findsOneWidget);
+    await tester.tap(picker('Claude Code'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('DSH').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    final thread = workspace.selected;
+    expect(thread.kernel, MockKernels.dsh);
+    expect(picker('DSH'), findsOneWidget);
+
+    // Three tiers to pick from before it starts.
+    await tester.tap(picker('Workspace only'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Read-only'), findsWidgets);
+    expect(find.text('Unrestricted'), findsWidgets);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // Started, the kernel stays and one tier does.
+    thread.session.send(const ComposerMessage(text: '看一下输入框'));
+    await tester.pump();
+    expect(picker('DSH'), findsNothing);
+    expect(thread.session.permissions!.options, hasLength(1));
+    await tester.tap(picker('Workspace only'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Read-only'), findsNothing);
+    expect(find.text('Unrestricted'), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump(const Duration(milliseconds: 300));
+
+    thread.session.stop();
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('a kernel whose handshake took no pictures is given none', (
+    tester,
+  ) async {
+    // A test's platform is no desktop build, and the window reads a
+    // picture's file on one only (see [WindowControls.readImageFile]).
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final session = await pumpPictured(
+        tester,
+        MockDshTransport(image: false),
+      );
+      expect(session.acceptsImages, isFalse);
+
+      // A picture put in goes in as its path, not as a picture.
+      await insertPicture(tester);
+      expect(
+        [for (final embed in draftEmbeds(tester)) embed.type],
+        [ComposerTokenEmbed.type],
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('a kernel that takes pictures gets them', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    try {
+      final session = await pumpPictured(tester, MockDshTransport());
+      expect(session.acceptsImages, isTrue);
+
+      await insertPicture(tester);
+      expect(
+        [for (final embed in draftEmbeds(tester)) embed.type],
+        [ComposerImageEmbed.type],
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+}
+
+/// A DSH conversation over [transport], its process, ready: what its
+/// handshake said is in effect.
+Future<ChatSession> pumpPictured(
+  WidgetTester tester,
+  MockDshTransport transport,
+) async {
+  final kernel = MockKernels.dshOn(transport);
+  final session = ChatSession(
+    kernel: kernel,
+    kernels: [kernel],
+    historyCount: 0,
+  );
+  addTearDown(session.dispose);
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: buildAppTheme(),
+      home: ChatScreen(session: session),
+    ),
+  );
+  await tester.pump();
+  // Started on the test's own clock: the patch it writes and the mock's
+  // answers take turns of the real one.
+  for (
+    var i = 0;
+    i < 200 && session.health.status != KernelHealthStatus.ready;
+    i++
+  ) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pump();
+  }
+  expect(
+    session.health.status,
+    KernelHealthStatus.ready,
+    reason: '${session.health.message} ${session.health.detail}',
+  );
+  return session;
+}
+
+/// A picture put in the way a dropped file goes in, as the window reads it:
+/// what comes of it is the conversation's to say (see
+/// [ChatSession.acceptsImages]).
+Future<void> insertPicture(WidgetTester tester) async {
+  final messenger = tester.binding.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(const MethodChannel('baocode/window'), (
+    call,
+  ) async {
+    if (call.method == 'readImageFile') {
+      return {'bytes': _onePixelPng, 'type': 'image/png'};
+    }
+    return null;
+  });
+  addTearDown(
+    () => messenger.setMockMethodCallHandler(
+      const MethodChannel('baocode/window'),
+      null,
+    ),
+  );
+  await tester.runAsync(
+    () => tester
+        .state<ChatComposerState>(find.byType(ChatComposer))
+        .insertFiles(const [ComposerFile('/p/photo.png')]),
+  );
+  await tester.pump();
+}
+
+/// A 1×1 PNG: what the window reads a picture's file as.
+final Uint8List _onePixelPng = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA'
+  'hKmMIQAAAABJRU5ErkJggg==',
+);
+
+/// What the composer's draft holds, one thing at a time.
+List<ComposerEmbed> draftEmbeds(WidgetTester tester) {
+  final editor = tester.widget<MarkdownEditor>(find.byType(MarkdownEditor));
+  return [
+    for (final run in composerEmbedsIn(editor.controller.text)) run.embed,
+  ];
 }
 
 const _frame = Duration(milliseconds: 16);

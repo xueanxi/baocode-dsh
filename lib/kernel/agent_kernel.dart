@@ -343,7 +343,11 @@ abstract interface class RenamesSession {
 }
 
 /// Takes pictures with a message ([KernelTurn.images]).
-abstract interface class AcceptsImages {}
+abstract interface class AcceptsImages {
+  /// Whether a picture sent now would actually reach the model: kernels that
+  /// can only take them on some routes say so here.
+  bool get supportsImages;
+}
 
 /// Reads the conversation it continues ([KernelContext.resume]) before
 /// showing it.
@@ -460,6 +464,7 @@ class KernelDescriptor {
     required this.description,
     required this.create,
     this.catalog,
+    this.available,
   });
 
   final String id;
@@ -470,6 +475,11 @@ class KernelDescriptor {
 
   /// Its kept sessions, when it keeps any.
   final SessionCatalog? catalog;
+
+  /// Whether this kernel can work in [context] at all, e.g. a dsh kernel
+  /// needs one folder and the machine it runs on: not offered otherwise,
+  /// and a saved one falls back to one that can.
+  final bool Function(KernelContext context)? available;
 
   KernelOption get option => KernelOption(id, label, icon, description);
 }

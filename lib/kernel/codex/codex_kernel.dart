@@ -47,6 +47,11 @@ class CodexKernel
   @override
   KernelHealth get health => KernelHealth.ready;
 
+  /// Pictures go with the message as they are: Codex takes them on every
+  /// route it has.
+  @override
+  bool get supportsImages => true;
+
   @override
   String? get sessionId => null;
 

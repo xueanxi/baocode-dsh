@@ -6060,6 +6060,44 @@ class AppLocalizationsEn extends AppLocalizations {
       'None found yet: with the Claude Code CLI picked, it is downloaded as the first conversation starts.';
 
   @override
+  String get dshSettingsTitle => 'DSH';
+
+  @override
+  String get dshPathSetting => 'Path';
+
+  @override
+  String get dshPathSettingDescription =>
+      'Empty: the dsh on this machine\'s PATH, whatever its version. A path: that dsh always, either its lib/bin.js or the node to run it with and that path apart by a |. Past conversations are in dsh web, not here, and DSH is offered only in single-folder local projects. (dshCode.path)';
+
+  @override
+  String get dshPathSettingHint => 'Automatic';
+
+  @override
+  String get dshPathSettingPermissions =>
+      'Permission is picked for each conversation and locked once the first message is sent; a command that leaves the workspace is the only thing asked about.';
+
+  @override
+  String get dshPermissionReadOnly => 'Read-only';
+
+  @override
+  String get dshPermissionReadOnlyDetail =>
+      'Look and read only; on Windows shell commands are limited to Constrained Language mode';
+
+  @override
+  String get dshPermissionWorkspaceWrite => 'Workspace only';
+
+  @override
+  String get dshPermissionWorkspaceWriteDetail =>
+      'Change project files and run commands; asked when a command goes outside the workspace';
+
+  @override
+  String get dshPermissionFullAccess => 'Unrestricted';
+
+  @override
+  String get dshPermissionFullAccessDetail =>
+      'No workspace limits, and approval is never asked: a request that would need it is rejected';
+
+  @override
   String get generalSettingsIdeWindows => 'Fast Ide Windows';
 
   @override

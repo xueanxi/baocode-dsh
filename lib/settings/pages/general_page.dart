@@ -10,6 +10,7 @@ import '../../ide/ide_notifications.dart' show IdeSeverity;
 import '../../kernel/claude_code/claude_core_setting.dart';
 import '../../kernel/claude_code/claude_path_setting.dart';
 import '../../kernel/commit_attribution.dart';
+import '../../kernel/dsh/dsh_path_setting.dart';
 import '../../kernel/prompt_suggestions.dart';
 import '../../chat/composer/composer_polish.dart' show ComposerPolishSetting;
 import '../../chat/widgets/turn_footer.dart' show LiveTurnStatsSetting;
@@ -37,7 +38,7 @@ import 'settings_widgets.dart';
 /// (`chat.promptSuggestions`), whether the composer has its Polish button
 /// (`chat.composer.polish`), whether the turn under way shows its time,
 /// speed and tokens (`chat.liveTurnStats`), the Claude Code to run
-/// (`claudeCode.path`),
+/// (`claudeCode.path`), the dsh to run (`dshCode.path`),
 /// the `code` shell command, and Open with BaoCode in Finder's or
 /// Explorer's context menu. A choice is written at once; the default is not
 /// written.
@@ -420,6 +421,27 @@ class GeneralSettingsPage extends StatelessWidget {
                   ),
                 ],
               ),
+            // DSH keeps its conversations in ~/.dsh, which this one does not
+            // list: what this row sets is which dsh to start, when it is not
+            // the one on the PATH.
+            SettingsGroup(
+              title: l10n.dshSettingsTitle,
+              children: [
+                SettingsCard(
+                  children: [
+                    _DshPathSetting(
+                      path: DshPathSetting.parse(
+                        settings?[DshPathSetting.settingKey],
+                      ),
+                      onChanged: (path) => _write(
+                        DshPathSetting.settingKey,
+                        path.isEmpty ? null : path,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
             SettingsGroup(
               title: l10n.generalSettingsWindows,
               children: _windowRows(context),
@@ -744,6 +766,35 @@ class _ClaudePathSettingState extends State<_ClaudePathSetting> {
         semanticLabel: 'Claude Code ${l10n.claudePathSetting}',
         width: 260,
         onSubmitted: widget.onChanged,
+      ),
+    );
+  }
+}
+
+/// The dsh to run: the path set (none for the one on the PATH), and under it
+/// what its permission choice comes to. Nothing is looked up until a
+/// conversation starts, so no path is shown as in use here.
+class _DshPathSetting extends StatelessWidget {
+  const _DshPathSetting({required this.path, required this.onChanged});
+
+  final String? path;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    return SettingsRow(
+      label: l10n.dshPathSetting,
+      description: l10n.dshPathSettingDescription,
+      below: [
+        Text(l10n.dshPathSettingPermissions, style: SettingsText.description),
+      ],
+      trailing: SettingsTextField(
+        value: path ?? '',
+        hint: l10n.dshPathSettingHint,
+        semanticLabel: 'DSH ${l10n.dshPathSetting}',
+        width: 260,
+        onSubmitted: onChanged,
       ),
     );
   }

@@ -32,6 +32,18 @@ KernelOption localizedKernelOption(
       l10n.composerApprovalFullAccess,
       l10n.composerApprovalFullAccessDetail,
     ),
+    ('dsh', KernelChoiceKind.permission, 'read-only') => (
+      l10n.dshPermissionReadOnly,
+      l10n.dshPermissionReadOnlyDetail,
+    ),
+    ('dsh', KernelChoiceKind.permission, 'workspace-write') => (
+      l10n.dshPermissionWorkspaceWrite,
+      l10n.dshPermissionWorkspaceWriteDetail,
+    ),
+    ('dsh', KernelChoiceKind.permission, 'danger-full-access') => (
+      l10n.dshPermissionFullAccess,
+      l10n.dshPermissionFullAccessDetail,
+    ),
     _ => null,
   };
   if (text == null) return option;

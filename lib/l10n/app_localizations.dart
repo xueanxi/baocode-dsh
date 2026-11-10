@@ -9759,6 +9759,72 @@ abstract class AppLocalizations {
   /// **'None found yet: with the Claude Code CLI picked, it is downloaded as the first conversation starts.'**
   String get claudePathMissing;
 
+  /// No description provided for @dshSettingsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DSH'**
+  String get dshSettingsTitle;
+
+  /// No description provided for @dshPathSetting.
+  ///
+  /// In en, this message translates to:
+  /// **'Path'**
+  String get dshPathSetting;
+
+  /// Settings → General → DSH: what the path setting overrides. Three things are named: the dsh found on the PATH, the two forms a path may take, and that dsh keeps its own conversations (dsh web) and only runs in single-folder local projects.
+  ///
+  /// In en, this message translates to:
+  /// **'Empty: the dsh on this machine\'s PATH, whatever its version. A path: that dsh always, either its lib/bin.js or the node to run it with and that path apart by a |. Past conversations are in dsh web, not here, and DSH is offered only in single-folder local projects. (dshCode.path)'**
+  String get dshPathSettingDescription;
+
+  /// No description provided for @dshPathSettingHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic'**
+  String get dshPathSettingHint;
+
+  /// Settings → General → DSH: under the path setting, that the permission choice is locked in after the first message.
+  ///
+  /// In en, this message translates to:
+  /// **'Permission is picked for each conversation and locked once the first message is sent; a command that leaves the workspace is the only thing asked about.'**
+  String get dshPathSettingPermissions;
+
+  /// DSH's permission mode that only reads: the label.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only'**
+  String get dshPermissionReadOnly;
+
+  /// As dshPermissionReadOnly, the description under it.
+  ///
+  /// In en, this message translates to:
+  /// **'Look and read only; on Windows shell commands are limited to Constrained Language mode'**
+  String get dshPermissionReadOnlyDetail;
+
+  /// DSH's permission mode that writes within the workspace: the label.
+  ///
+  /// In en, this message translates to:
+  /// **'Workspace only'**
+  String get dshPermissionWorkspaceWrite;
+
+  /// As dshPermissionWorkspaceWrite, the description under it.
+  ///
+  /// In en, this message translates to:
+  /// **'Change project files and run commands; asked when a command goes outside the workspace'**
+  String get dshPermissionWorkspaceWriteDetail;
+
+  /// DSH's permission mode with no limits: the label.
+  ///
+  /// In en, this message translates to:
+  /// **'Unrestricted'**
+  String get dshPermissionFullAccess;
+
+  /// As dshPermissionFullAccess, the description under it: says approval is never asked and such requests are rejected.
+  ///
+  /// In en, this message translates to:
+  /// **'No workspace limits, and approval is never asked: a request that would need it is rejected'**
+  String get dshPermissionFullAccessDetail;
+
   /// No description provided for @generalSettingsIdeWindows.
   ///
   /// In en, this message translates to:
