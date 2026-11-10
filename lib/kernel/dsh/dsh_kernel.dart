@@ -8,12 +8,15 @@ import 'package:flutter/material.dart';
 import '../../chat/chat_models.dart';
 import '../../platform/data_dir.dart';
 import '../agent_kernel.dart';
+import '../kernel_event.dart';
 import '../kernel_types.dart';
+import '../transcript.dart';
 import 'dsh_approval.dart';
 import 'dsh_bash.dart';
 import 'dsh_locate.dart';
 import 'dsh_notices.dart';
 import 'dsh_patch.dart';
+import 'dsh_sessions.dart';
 import 'dsh_transport.dart';
 import 'dsh_translator.dart';
 
@@ -35,8 +38,10 @@ typedef _Offer = ({
 /// `prepare` finds dsh, writes the profile patch it runs with and shakes
 /// hands, and only the first message creates a session: an empty one would
 /// otherwise be left in `~/.dsh` for every conversation opened. What it does
-/// not do, it does not declare: no session catalog, no history, no usage
-/// bookkeeping (see `docs/spec/dsh-kernel.md` §5.2).
+/// not do, it does not declare: no usage bookkeeping (see
+/// `docs/spec/dsh-kernel.md` §5.2). The conversations it starts are kept in
+/// [DshSessionStore], as dsh names no titles and replays no history (F17,
+/// F15).
 class DshKernel
     with KernelEventSource
     implements
@@ -52,8 +57,12 @@ class DshKernel
     required this._start,
     required this._locate,
     Future<Map<String, String>> Function()? environment,
+    DshSessionStore? sessions,
     this._credentials,
-  }) : _environment = environment ?? ClaudeEnvironment.of {
+  }) : _environment = environment ?? ClaudeEnvironment.of,
+       _sessions = sessions ?? DshSessionStore.file(),
+       _sessionId = _context.resume?.id,
+       _title = _context.resume?.title ?? '' {
     _translator = DshTranslator(
       emit: emit,
       nextSeq: () => nextSeq,
@@ -87,6 +96,22 @@ class DshKernel
   /// machine's own store, by name only (`dsh_notices.dart`).
   final DshCredentialRefs? _credentials;
 
+  /// Where the conversations this kernel starts are kept, for the sidebar
+  /// and for reading back (see [DshCatalog]).
+  final DshSessionStore _sessions;
+
+  /// What was said in this conversation, as reported, to keep at each
+  /// turn's end (see `docs/spec/dsh-kernel.md` §5.2).
+  final Transcript _kept = Transcript();
+
+  /// Whether what was said before this run was read: only the first start
+  /// reads it, not every start after a release.
+  bool _historyRead = false;
+
+  /// What it was first asked, its first line: the title its session is
+  /// kept under until dsh's own names anything.
+  String _title;
+
   late final DshTranslator _translator;
 
   /// dsh's approvals, asked as the conversation's questions, and the notices
@@ -105,6 +130,10 @@ class DshKernel
   StreamSubscription<Map<String, Object?>>? _subscription;
 
   KernelHealth _health = KernelHealth.idle;
+
+  /// The session this conversation runs in: the one it continues when
+  /// started from a kept thread (see [DshSessionStore]), one dsh makes on
+  /// the first message otherwise.
   String? _sessionId;
 
   /// Whether the running process has [_sessionId] open: after a release it
@@ -177,6 +206,60 @@ class DshKernel
   void _setHealth(KernelHealth health) {
     _health = health;
     emitInfoChanged();
+  }
+
+  /// Keeps what this conversation said while reporting it: the same events
+  /// the session shows, so that what is kept and what is shown cannot come
+  /// apart.
+  @override
+  void emit(KernelEvent event) {
+    _kept.apply(event);
+    super.emit(event);
+    if (event is TurnEnded) unawaited(_keepSession());
+  }
+
+  /// The title a first message gives a session: its first line, as the
+  /// sidebar names a new agent (see `Workspace._sync`).
+  static String _titleOf(String text) => text.trim().split('\n').first.trim();
+
+  /// Reads what was said before this run, where the conversation continues
+  /// one kept from before, and shows it before anything new: dsh's
+  /// `session/resume` replays nothing (F15).
+  Future<void> _readHistory() async {
+    if (_historyRead) return;
+    _historyRead = true;
+    final id = _sessionId;
+    if (id == null || _disposed) return;
+    final List<(String, ChatItem)> items;
+    try {
+      items = await _sessions.history(id);
+    } on Object catch (error) {
+      debugPrint('DSH conversation not read: $error');
+      return;
+    }
+    if (items.isEmpty || _disposed) return;
+    // The ids dsh gives are its own count, which a new process starts
+    // again: on from the ones in the history, or a new message would
+    // replace an old one.
+    _translator.continueFrom(items.map((kept) => kept.$1));
+    emit(HistoryPrepended(nextSeq, items));
+  }
+
+  /// Keeps the session's title and time, and what was said so far: at its
+  /// creation (nothing said yet) and at each turn's end.
+  Future<void> _keepSession() async {
+    final id = _sessionId;
+    if (id == null || _disposed) return;
+    final items = [for (final kept in _kept.liveItems) kept];
+    try {
+      await _sessions.keepHistory(id, items);
+      await _sessions.keep(
+        DshSession(id: id, cwd: _cwd, title: _title, updatedAt: DateTime.now()),
+      );
+    } on Object catch (error) {
+      // Not kept is not a turn that failed: dsh still has the conversation.
+      debugPrint('DSH conversation not kept: $error');
+    }
   }
 
   @override
@@ -277,6 +360,9 @@ class DshKernel
     // session another process still holds (F15).
     if (_transport != null) _teardown();
     await _stopped;
+    // Before anything of this run: what was said before, where the
+    // conversation continues one kept from before.
+    await _readHistory();
     _setHealth(const KernelHealth(KernelHealthStatus.starting));
     final DshInstall? install;
     try {
@@ -421,6 +507,9 @@ class DshKernel
       return;
     }
     _sentTurns.add(turn.id);
+    // Its first message names the session, as it names a new agent's in
+    // the sidebar: kept for the next run, where dsh names no title (F17).
+    if (_title.isEmpty) _title = _titleOf(turn.text);
     // Whether pictures can go is dsh's answer at the handshake: a turn
     // carrying them before it waits for that answer rather than guess, since
     // the thread shows what is sent (§5.5).
@@ -558,6 +647,9 @@ class DshKernel
     _sessionActive = _sessionId != null;
     _applyOptions(result['configOptions']);
     emitInfoChanged();
+    // Listed by the next run from the moment dsh makes it, even if nothing
+    // in it is said yet (a failure before the first turn ends).
+    unawaited(_keepSession());
     await _pushPicks();
   }
 

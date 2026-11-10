@@ -9771,10 +9771,10 @@ abstract class AppLocalizations {
   /// **'Path'**
   String get dshPathSetting;
 
-  /// Settings → General → DSH: what the path setting overrides. Three things are named: the dsh found on the PATH, the two forms a path may take, and that dsh keeps its own conversations (dsh web) and only runs in single-folder local projects.
+  /// Settings → General → DSH: what the path setting overrides. Three things are named: the dsh found on the PATH, the two forms a path may take, and that conversations are kept where they were started (BaoCode here, dsh web there), and DSH only runs in single-folder local projects.
   ///
   /// In en, this message translates to:
-  /// **'Empty: the dsh on this machine\'s PATH, whatever its version. A path: that dsh always, either its lib/bin.js or the node to run it with and that path apart by a |. Past conversations are in dsh web, not here, and DSH is offered only in single-folder local projects. (dshCode.path)'**
+  /// **'Empty: the dsh on this machine\'s PATH, whatever its version. A path: that dsh always, either its lib/bin.js or the node to run it with and that path apart by a |. Conversations started here are kept; ones started in dsh web are in dsh web. DSH is offered only in single-folder local projects. (dshCode.path)'**
   String get dshPathSettingDescription;
 
   /// No description provided for @dshPathSettingHint.

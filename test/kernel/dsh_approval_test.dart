@@ -7,6 +7,7 @@ import 'package:baocode/kernel/dsh/dsh_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_locate.dart';
 import 'package:baocode/kernel/dsh/dsh_notices.dart';
 import 'package:baocode/kernel/dsh/dsh_patch.dart';
+import 'package:baocode/kernel/dsh/dsh_sessions.dart';
 import 'package:baocode/kernel/dsh/dsh_transport.dart';
 import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
 import 'package:baocode/kernel/kernel_event.dart';
@@ -603,6 +604,7 @@ class _Rig {
     start: start,
     locate: locate,
     environment: () async => const {'PATH': '/usr/bin'},
+    sessions: MemoryDshSessionStore(),
     credentials: credentials ?? () async => {DshPatch.credentialRef},
   );
 }

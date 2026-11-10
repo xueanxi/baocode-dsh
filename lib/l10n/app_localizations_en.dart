@@ -6067,7 +6067,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get dshPathSettingDescription =>
-      'Empty: the dsh on this machine\'s PATH, whatever its version. A path: that dsh always, either its lib/bin.js or the node to run it with and that path apart by a |. Past conversations are in dsh web, not here, and DSH is offered only in single-folder local projects. (dshCode.path)';
+      'Empty: the dsh on this machine\'s PATH, whatever its version. A path: that dsh always, either its lib/bin.js or the node to run it with and that path apart by a |. Conversations started here are kept; ones started in dsh web are in dsh web. DSH is offered only in single-folder local projects. (dshCode.path)';
 
   @override
   String get dshPathSettingHint => 'Automatic';

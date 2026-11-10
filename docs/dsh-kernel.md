@@ -4,6 +4,7 @@ DSH（DeepSeek Harness）是 BaoCode 的第二个 agent 内核，与 Claude Code
 
 - **Claude Code 仍是默认**：新对话默认选它，它在选择器里排第一。
 - **bots 仍固定 Claude Code**（`lib/bots/bots.dart` 只认 `KernelRegistry.claudeCode.id`）。
+- **BaoCode 开过的 DSH 会话会记住**：重启后侧栏仍列出，点开能读回当时的对话；在 dsh web 里开始的会话不列（见 §5）。
 - DSH 只在**单目录的本地项目**里出现：多文件夹工作区（cwd 是 `<data>/workspaces/<id>`）与 SSH 远端项目里，选择器不列它（`KernelRegistry.dsh.available`）。
 
 接入方式是 `node <dsh>/lib/bin.js --profile acp --patch <补丁>`：dsh 自带的 ACP profile，JSON-RPC 2.0 over stdio。BaoCode 把六种会话更新翻译成既有的对话事件，不引入新的 UI 协议。
@@ -49,6 +50,7 @@ BAOCODE_DSH_PATH=/path/to/dsh/lib/bin.js node tool/dsh_smoke.mjs
 | dsh | 需要本机装好 `@deepseek-ai/dsh`。BaoCode **不安装、不升级、不打包** dsh，只定位已有的那一份，所以 `dsh web` 与 BaoCode 跑的是同一份安装。 |
 | 共享 `~/.dsh` | 会话、模型路由、凭据都在 `~/.dsh`（`DSH_HOME` 生效）。BaoCode 在 dsh web 里能看到同一批会话；反过来 dsh web 也能看到 BaoCode 建的会话。 |
 | 不写 `~/.dsh` | BaoCode 自己不写 `~/.dsh` 下任何文件：不跑 `plugin`、不跑 `--dump-config`，不动 profiles/sessions/projcache。会话文件是 **dsh 自己**在建会话时写的（`session.v4.jsonl.zstd`），与 dsh web 的行为一致。 |
+| BaoCode 自己的会话账本 | dsh 的 `session/list` 没有标题与时间、`session/resume` 不回放历史，所以 BaoCode 把**自己开过的**会话记在应用数据目录的 `dsh/sessions/`（id、cwd、标题、时间与对话条目）。重启后侧栏据此列出、点开读回；在 dsh web 里开始的会话不在其中。 |
 | 凭据 | 补丁只写 `apiKeyEnv: STEPCODEV2_API_KEY` 这个名字，不写 key；BaoCode 也不读 `~/.dsh/.credentials.yaml` 的**值**，预检只看 `refs:` 下的 key 名。 |
 | 项目目录 | 进程的 cwd 与 `session/new` 的 `cwd` 都是项目目录。会话头里的 cwd 就是本会话 `workspace-write` 的边界（F5）。 |
 | 版本 | 版本从被定位包的 `package.json` 读（F3；ACP 桥自报的 `agentInfo.version` 恒为 `"0.0.1"`，不是 dsh 版本）。低于验证版本只发一条会话内提醒，仍然可用。 |
@@ -106,7 +108,7 @@ dsh 的三个沙箱档位（`DSH_PERMISSION_MODE`，F22）：
 以下每条都对应规格 §9 与事实表，接受它们再用这个内核：
 
 1. **文本按整条消息出现**（F8）：dsh 提交完整消息才发一个 `agent_message_chunk`，没有 token 流；一轮多步会变成多条消息条目，按到达顺序排列。
-2. **不列历史会话**（F17、F25）：BaoCode 没有 dsh 的会话目录，重启后侧栏不会出现旧的 DSH 对话。正文在 `~/.dsh`，去 **dsh web** 看。
+2. **会话账本是本地的**：重启后能列出并读回 **BaoCode 开过的** DSH 对话；在 dsh web 里开始的会话不列，在 dsh web 里接着说过的内容也不会出现在本地快照里。删除对话只删本地记录，`~/.dsh` 里的 session 仍在（dsh web 还看得到）。本版本之前建的会话没有本地记录，仍只在 dsh web 里。
 3. **权限档位首条消息后锁定**（F16）：想换档只能新开对话（见 §3）。
 4. **多文件夹工作区与远端项目不提供 DSH**：dsh 的沙箱边界是单个项目目录（F5），本机 dsh 也跑不到远端主机上。DSH 不出现在这些项目里是设计，不是故障。
 5. **Windows 默认只有 pwsh**（F26）：base 禁用 `tool-bash`/`bash-sandbox`，启用 `tool-pwsh`/`pwsh-sandbox`。要让 dsh 用 bash，把 `dsh-gitbash-shell@0.38.5` 装进 acp profile：
@@ -126,7 +128,7 @@ dsh 的三个沙箱档位（`DSH_PERMISSION_MODE`，F22）：
 15. 图片：能力为 false 时剥掉并发一次 warning；能力为 true 时图片随消息放在文本前。握手未完成时能力未知，带图的一轮等握手（TurnStarted 因此晚一点出现；界面上粘贴图片要先知道能力，所以这是罕见路径）；提示与消息都在同一轮内，提示不会跑到 TurnStarted 前面。能力随进程走，`release` 或进程退出后复位为未知。
 16. Windows 上崩溃/强杀残留的 dsh 进程无法可靠回收；正常退出会 `stopDshProcesses`，启动时会 `reapDshProcesses`，但崩溃这种场景不承诺。
 17. 会话的 `cwd` 是它的 workspace 边界（F5）；项目挪了位置，旧会话 resume 会因 `cwd does not match` 失败（显示为轮次错误），只能新开对话。
-18. dsh 的 `session/list` 只有 `{sessionId, cwd}`、没有标题与时间（F17），所以 BaoCode 不做 dsh 的会话列表；不要指望“最近会话”。
+18. dsh 的 `session/list` 只有 `{sessionId, cwd}`、没有标题与时间（F17），所以列表与标题来自 BaoCode 自己的账本（§2、规格 §5.13），不来自 dsh。
 19. 线程记住的内核在当前项目不可用时（例如把 DSH 对话挪进多文件夹工作区，或挪到远端项目），会话会以当前第一个可用的内核打开（通常是 Claude Code），不报错；一个都不可用时才保留原内核。这是通用的线程恢复行为（`ChatSession._availableKernel`），不是 DSH 特有。
 
 ## 6. 协议映射
@@ -172,6 +174,7 @@ TurnEnded(turnId, interrupted:, worked:)
 ## 7. 补丁文件
 
 - 位置：应用数据目录下的 `dsh/acp.patch.yml`（Windows `%APPDATA%\baocode\dsh\acp.patch.yml`；macOS `~/Library/Application Support/baocode/dsh/acp.patch.yml`；Linux `~/.config/baocode/dsh/acp.patch.yml`）。测试里是临时数据目录。
+- 会话账本也在应用数据目录下：`dsh/sessions/index/<id>.json` 与 `dsh/sessions/history/<id>.json`，与补丁无关，不会因补丁重建而丢失（见规格 §5.13）。
 - 内容由 `DshPatch.content` 生成：`llm-pi-ai` 声明 `stepcodev2` 路由（`apiKeyEnv: STEPCODEV2_API_KEY`、`api: openai-completions`、`baseURL: https://i-ai-gw.stepx.com/v1`、模型 `deepseek-v4.1-flash`、`contextWindow: 512000`、`input: [text, image]`），`acp` 声明该 provider 与该模型。装了 Git Bash 插件、且本机找得到 Git Bash 时，再追加启用 `tool-bash` 的一行——执行器由插件的 bundle patch 插入，补丁里写不进去（F28）。
 - **不含密钥**：只写 `apiKeyEnv` 的名字；key 留在 `~/.dsh`，由 dsh 自己读。文件里也不会出现 `!!js`（生成时会检查）。
 - `apiKeyEnv` 必须与 `~/.dsh/.credentials.yaml` 的 `refs:` 里的 key **逐字一致**（F24）。改路由名时要同时改 `DshPatch.credentialRef`，否则预检会报缺凭据、每轮以 `MISSING_CREDENTIAL` 失败。
@@ -272,7 +275,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 错误轮显示 error 气泡，按钮恢复可用，内核仍是 ready
 - [ ] 退出应用后没有残留的 dsh 进程（任务管理器 / `tasklist`）
 - [ ] 设置 → 通用 → DSH 的路径能覆盖；清空后回到自动发现
-- [ ] 侧栏没有 DSH 历史（预期），dsh web 里能看到这次会话
+- [ ] 退出应用再打开：侧栏仍有这个 DSH 对话，点开能看到刚才的消息，接着发能继续
+- [ ] 删除这个 DSH 对话后重启：侧栏不再出现（`~/.dsh` 里的 session 仍在，dsh web 还看得到）
 
 ## 10. 接第三个内核
 
@@ -298,7 +302,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 | `lib/kernel/dsh/dsh_patch.dart` | 生成/缓存 ACP 补丁，原子写、权限位、bash 两行的条件；`contextWindow`（上下文窗口初值的唯一一处） |
 | `lib/kernel/dsh/dsh_bash.dart` | 找本机 Git 的 `bash.exe`：`BAOCODE_GIT_BASH` → 登录 shell 的 PATH（跳过 WSL 的那份）→ `git --exec-path` 所属 Git → Program Files 里的 Git |
 | `lib/kernel/dsh/dsh_transport.dart`、`dsh_transport_io.dart` | 子进程传输：按行 JSON-RPC、stderr 环（落库前脱敏）、退出消息、进程树收尾与登记 |
-| `lib/kernel/dsh/dsh_kernel.dart` | 适配器：握手、会话创建/续接、选项、健康、生命周期、审批接线 |
+| `lib/kernel/dsh/dsh_kernel.dart` | 适配器：握手、会话创建/续接、选项、健康、生命周期、审批接线；会话账本与历史回读的接线 |
+| `lib/kernel/dsh/dsh_sessions.dart`、`dsh_sessions_io.dart` | BaoCode 自己的会话账本与目录（`DshCatalog`）：索引、历史（`ChatCodec`）、删除；一个会话一对文件 |
 | `lib/kernel/dsh/dsh_translator.dart` | 六种 update、prompt 结果、JSON-RPC 错误 → `KernelEvent` 与 turn 契约 |
 | `lib/kernel/dsh/dsh_approval.dart` | 审批请求/应答/取消，工具名与理由的关联 |
 | `lib/kernel/dsh/dsh_notices.dart` | 会话内提示（版本、凭据、图片）与凭据 refs 预检 |
@@ -316,6 +321,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - `test/kernel/dsh_turn_test.dart`：一轮的事件顺序（含带图时提示在同一轮内、握手前发图等握手）、文本、思考、工具、usage、错误、取消；
 - `test/kernel/dsh_approval_test.dart`：审批的挂起、三种应答线形、理由回退、迟到应答；
 - `test/kernel/dsh_integration_test.dart`：跨票回归，prepare → 首条消息建会话 → 工具+审批 → 下一轮 → 出错轮 → release → prepare/resume → dispose；
+- `test/kernel/dsh_restart_test.dart`：重启后再续（resume 而非 new）、历史与标题的读写、文件账本与目录；
 - `test/kernel/dsh_capabilities_test.dart`、`dsh_notices_test.dart`：能力声明与提示去重、凭据预检；
 - `test/kernel/dsh_bash_test.dart`：Git Bash 的发现顺序、跳过 WSL、无 git 时不跑 git、POSIX 返回 null；
 - `test/kernel_ui_test.dart`：选择器、权限档位锁定、图片开关等界面接缝；

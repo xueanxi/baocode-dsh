@@ -4,6 +4,7 @@ import 'package:baocode/chat/chat_models.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_locate.dart';
+import 'package:baocode/kernel/dsh/dsh_sessions.dart';
 import 'package:baocode/kernel/dsh/dsh_transport.dart';
 import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
 import 'package:baocode/kernel/kernel_event.dart';
@@ -299,6 +300,7 @@ class _FakeDsh {
     start: start,
     locate: locate,
     environment: () async => const {'PATH': '/usr/bin'},
+    sessions: MemoryDshSessionStore(),
     // Named rather than looked for: no test reads the user's own ~/.dsh.
     credentials: () async => {'STEPCODEV2_API_KEY'},
   );

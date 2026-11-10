@@ -31,6 +31,7 @@ enum DataDirectorySource {
 /// <path>/state/{state.json,storage.json,*-processes.json}
 /// <path>/servers/  <path>/language-packs/
 /// <path>/checkpoints/             what files were before agents changed them
+/// <path>/dsh/                     dsh's patch, and the conversations it ran
 /// <path>/workspaces/              the folders of multi-folder workspaces
 /// <path>/cache/                   what can be made again, to start faster
 /// <path>/pastes/                  pastes too long to send, which agents read
@@ -102,6 +103,11 @@ class DataDirectory {
   /// The ACP patch dsh runs with, written for the dsh on this machine (see
   /// lib/kernel/dsh/dsh_patch.dart).
   String get dshDir => p.join(path, 'dsh');
+
+  /// The conversations BaoCode started with dsh: their titles and what was
+  /// said in them (see lib/kernel/dsh/dsh_sessions.dart). dsh's own store
+  /// names neither (F17, F15).
+  String get dshSessionsDir => p.join(dshDir, 'sessions');
 
   /// The pastes too long to go in a message, which it names for the agent
   /// to read instead (see paste_store.dart): kept, as the conversations

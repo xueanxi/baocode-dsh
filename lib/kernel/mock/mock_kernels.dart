@@ -8,6 +8,7 @@ import '../codex/mock_codex_transport.dart';
 import '../dsh/dsh_kernel.dart';
 import '../dsh/dsh_locate.dart';
 import '../dsh/dsh_patch.dart';
+import '../dsh/dsh_sessions.dart';
 import '../dsh/mock_dsh_transport.dart';
 
 /// Kernels over scripted transports: the real adapters, fed recorded
@@ -35,7 +36,16 @@ abstract final class MockKernels {
 
   /// DSH over [transport], its process: what it plays is what dsh answers,
   /// and what the kernel wrote is kept there, for a test to read.
-  static KernelDescriptor dshOn(MockDshTransport transport) {
+  ///
+  /// [sessions] is where its conversations are kept, and offered as a
+  /// catalog when given: a test restarting a conversation gives a store
+  /// that outlives the kernel. Otherwise they are kept for this run only,
+  /// and listed nowhere.
+  static KernelDescriptor dshOn(
+    MockDshTransport transport, {
+    DshSessionStore? sessions,
+  }) {
+    final store = sessions ?? MemoryDshSessionStore();
     late final KernelDescriptor descriptor;
     descriptor = KernelDescriptor(
       id: 'dsh',
@@ -47,6 +57,7 @@ abstract final class MockKernels {
         context,
         start: (_) async => transport,
         locate: _locateDsh,
+        sessions: store,
         // No login shell is asked: a mock process is not one to run
         // anything, and the shell's would be a test's own.
         environment: () async => const {'PATH': '/usr/bin'},
@@ -55,6 +66,7 @@ abstract final class MockKernels {
         // nothing of the user's is looked at.
         credentials: () async => {DshPatch.credentialRef},
       ),
+      catalog: sessions == null ? null : DshCatalog(sessions: store),
     );
     return descriptor;
   }

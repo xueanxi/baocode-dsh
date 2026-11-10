@@ -106,8 +106,8 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 
 ### 5.2 能力声明
 
-声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ReportsContext`、`AcceptsImages`。
-不声明：会话目录、`LoadsHistory`、fork、rewind、重命名、消息排队、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
+声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ReportsContext`、`AcceptsImages`；描述符带 `catalog: DshCatalog`（见 §5.13）。
+不声明：`LoadsHistory`、fork、rewind、重命名、消息排队、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
 
 要点：
 
@@ -220,8 +220,8 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 
 ### 5.8 生命周期
 
-- `prepare()`（视图出现）：定位 → 补丁 → 起进程 → `initialize`。**不建会话**（否则每打开一个 DSH 对话就在 `~/.dsh` 留一个空会话）。
-- 第一次 `send()`：若已有 `sessionId`（本次运行内 release 过）先 `session/resume`，否则 `session/new {cwd, mcpServers: []}`；`sessionId` 在 `session/new` 返回后立刻上报。
+- `prepare()`（视图出现）：读回上次的会话（若 `KernelContext.resume` 给了 id，见 §5.13）→ 定位 → 补丁 → 起进程 → `initialize`。**不建会话**（否则每打开一个 DSH 对话就在 `~/.dsh` 留一个空会话）。
+- 第一次 `send()`：若已有 `sessionId`（`KernelContext.resume` 给的旧会话，或本次运行内 release 过）先 `session/resume`，否则 `session/new {cwd, mcpServers: []}`；`sessionId` 在 `session/new` 返回后立刻上报并记进本地账本。
 - `release()`（视图全关）：空闲则关进程并等它退出（最多 5 秒）；忙碌则本轮结束后再关。
 - 下一次 `prepare()` 若要 resume，必须**先** `await` 旧进程 `exited`（否则 dsh 报 `session is already active` / `already owned`）；`-32603 already owned` 与 `-32602 already active` 可重试一次，其余错误判致命。
 - `dispose()`：关 stdin → 等 dsh 自己 flush（≥6 秒）→ 仍在则 `taskkill /pid <pid> /T /F`；从子进程登记器移除。`stopped` 在进程退出后完成。
@@ -249,7 +249,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 
 ### 5.11 安全与数据
 
-- 不写 `~/.dsh` 下任何文件（不跑 `--dump-config`、不跑 `plugin`、不动 profiles/sessions/projcache）。
+- 不写 `~/.dsh` 下任何文件（不跑 `--dump-config`、不跑 `plugin`、不动 profiles/sessions/projcache）；BaoCode 自己的账本写在应用数据目录（`dsh/acp.patch.yml` 与 `dsh/sessions/`，见 §5.13）。
 - 定位到的 dsh 必须与用户 `dsh web` 用的是同一份安装（同版本），不打包、不下载第二份。
 - 补丁是**可执行配置**：不含 `!!js`，目录 0700 / 文件 0600，原子重建，被改动即重建。
 - 不读、不复制 `~/.dsh/.credentials.yaml` 的值，不把 key 放进命令行/环境/补丁；只传 `apiKeyEnv` 的名字。
@@ -263,6 +263,17 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - 不进 arb：内核发出的会话内提示（英文，与 Claude 一致）、工具名、模型名。
 - `localizedKernelOption` 增加 `('dsh', permission, <id>)` 三条；未知保持原文。
 - 生成物（`app_localizations*.dart`）随 arb 一起提交。
+
+### 5.13 会话与历史（BaoCode 自己的账本）
+
+不读 `~/.dsh` 的原因：`session/list` 只给 id 与 cwd（F17），`session/resume` 不重放历史（F15），session 文件是 dsh 的内部格式（`session.v4.jsonl.zstd`，可能随 dsh 升级变化）。所以 BaoCode 记自己的一份：
+
+- **位置**：`<data>/dsh/sessions/index/<id>.json`（`id`、`cwd`、`title`、`updatedAt`）与 `history/<id>.json`（条目用 `ChatCodec` 编码）。一个会话一对文件，几个内核同时写也互不加锁；原子写。
+- **何时写**：`session/new` 返回后立刻写索引（本轮失败也算存在过）；每轮 `TurnEnded` 写历史与时间。标题取第一条消息的第一行（与侧栏命名新 agent 的规则一致）。
+- **何时读**：`DshCatalog.projects()` / `sessionsIn()` 读索引，侧栏据此列出；`prepare()` / 第一次 `send()` 起进程之前按 `KernelContext.resume.id` 读历史，以 `HistoryPrepended` 先发出去。dsh 的 `session/resume` 在这之后才发生，顺序不能反。
+- **id**：读回历史里的 `message:<n>` / `thought:<n>` 让翻译层从最大的 n 继续；新进程从 1 数起会覆盖旧条目。
+- **删除**：`DshCatalog.delete` 只删本地这对文件；dsh 自带的 session 文件仍在，dsh web 仍能看到。本版本之前建的会话没有本地记录，不会出现在侧栏。
+- **限制**：本地历史是快照。在 dsh web 里接着说过的内容不会进入这份快照；继续对话时 dsh 自己的上下文仍是完整的，只是 BaoCode 界面看不到那几轮。
 
 ## 6. Testing Decisions
 
@@ -283,6 +294,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - `dsh_kernel_test.dart`：握手、`session/new` 的 `[]` 与 cwd、模型分组、无 effort、contextWindow 初值、健康失败两种、版本提醒、选项在首条消息后收敛
 - `dsh_turn_test.dart`：TurnStarted/用户条目/TurnEnded 顺序与 id、整条文本、思考、工具卡成功/失败、usage、-32603 也发 TurnEnded、cancel
 - `dsh_approval_test.dart`：请求挂起、allow-once/reject-once/cancelled 线形、工具名与理由关联与缺失回退、迟到应答忽略
+- `dsh_restart_test.dart`：重启后 resume 而非 new、历史与标题的读写、`message:<n>` 续号、`DshCatalog` 列项、文件账本与删除
 - `kernel_ui_test.dart`（追加）：选择器两个内核、默认 Claude、首条消息后锁定、权限档位首条消息后只剩一项、图片开关随 `supportsImages`
 - `l10n_test.dart`（追加）：三档中文标签
 - `settings` 测试：`dshCode.path` 往返
@@ -304,7 +316,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 
 ## 8. Out of Scope
 
-- 会话目录、续接旧会话、删除会话（也没有“会话被别处占用”的交互）
+- 列出 dsh web 里开始的会话；用 dsh 的 `session/delete` 真删会话（本版本 ACP 没有 delete，BaoCode 的删除只删本地账本）
 - token 级流式文本
 - 会话内切换权限档位（dsh 不支持改已建会话的档位）
 - fork / rewind / 重命名 / 消息排队 / 后台任务 / MCP 管理 / 计划模式
@@ -317,7 +329,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 ## 9. 已知代价
 
 1. 文本按整条消息出现；一轮多步会分成多条。
-2. 不列历史会话：重启后侧栏没有 dsh 对话，正文在 `~/.dsh`，去 dsh web 看。
+2. 历史是 BaoCode 自己的快照：重启后能列出并读回 BaoCode 建的会话，但在 dsh web 里接着说过的内容不会出现在这份快照里；删除会话只删本地记录，`~/.dsh` 里的 session 仍在。本版本之前建的会话没有本地记录，仍只在 dsh web 里。
 3. 权限档位在首条消息后锁定；想换档只能新开对话。
 4. 多文件夹工作区与远端项目不提供 DSH。
 5. Windows 默认只有 pwsh；要 bash 得把 `dsh-gitbash-shell` 装进 acp profile，且装了之后 read-only 档位对 bash 不生效。

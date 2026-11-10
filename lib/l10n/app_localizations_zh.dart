@@ -5680,7 +5680,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get dshPathSettingDescription =>
-      '留空则自动用本机 PATH 上的 dsh，不挑版本。填入路径则固定用那一份：`lib/bin.js`，或用 `|` 分出 node 与该路径，指定用哪个 node 来跑它。历史会话在 dsh web 里查看，本内核不列；DSH 也只在单目录的本地项目里出现。（dshCode.path）';
+      '留空则自动用本机 PATH 上的 dsh，不挑版本。填入路径则固定用那一份：`lib/bin.js`，或用 `|` 分出 node 与该路径，指定用哪个 node 来跑它。在这里开始的对话会被保留；在 dsh web 里开始的仍去 dsh web 看。DSH 也只在单目录的本地项目里出现。（dshCode.path）';
 
   @override
   String get dshPathSettingHint => '自动';

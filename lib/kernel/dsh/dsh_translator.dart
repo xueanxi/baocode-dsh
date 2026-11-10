@@ -89,6 +89,25 @@ class DshTranslator {
   int _messages = 0;
   int _thoughts = 0;
 
+  /// Counts on from the ids of what a kept session already said: a new
+  /// process starts at one again, and one of its messages would replace the
+  /// same-numbered one read back.
+  void continueFrom(Iterable<String> ids) {
+    for (final id in ids) {
+      if (id.startsWith('message:')) {
+        _messages = math.max(
+          _messages,
+          int.tryParse(id.substring('message:'.length)) ?? 0,
+        );
+      } else if (id.startsWith('thought:')) {
+        _thoughts = math.max(
+          _thoughts,
+          int.tryParse(id.substring('thought:'.length)) ?? 0,
+        );
+      }
+    }
+  }
+
   /// Each tool call's title and detail, to show again when it ends: its
   /// update names only its id (F9).
   final Map<String, ({String title, String? detail})> _tools = {};

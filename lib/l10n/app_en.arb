@@ -4438,9 +4438,9 @@
   "claudePathMissing": "None found yet: with the Claude Code CLI picked, it is downloaded as the first conversation starts.",
   "dshSettingsTitle": "DSH",
   "dshPathSetting": "Path",
-  "dshPathSettingDescription": "Empty: the dsh on this machine's PATH, whatever its version. A path: that dsh always, either its lib/bin.js or the node to run it with and that path apart by a |. Past conversations are in dsh web, not here, and DSH is offered only in single-folder local projects. (dshCode.path)",
+  "dshPathSettingDescription": "Empty: the dsh on this machine's PATH, whatever its version. A path: that dsh always, either its lib/bin.js or the node to run it with and that path apart by a |. Conversations started here are kept; ones started in dsh web are in dsh web. DSH is offered only in single-folder local projects. (dshCode.path)",
   "@dshPathSettingDescription": {
-    "description": "Settings → General → DSH: what the path setting overrides. Three things are named: the dsh found on the PATH, the two forms a path may take, and that dsh keeps its own conversations (dsh web) and only runs in single-folder local projects."
+    "description": "Settings → General → DSH: what the path setting overrides. Three things are named: the dsh found on the PATH, the two forms a path may take, and that conversations are kept where they were started (BaoCode here, dsh web there), and DSH only runs in single-folder local projects."
   },
   "dshPathSettingHint": "Automatic",
   "dshPathSettingPermissions": "Permission is picked for each conversation and locked once the first message is sent; a command that leaves the workspace is the only thing asked about.",
