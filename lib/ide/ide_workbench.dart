@@ -106,7 +106,7 @@ class IdeWorkbench extends StatefulWidget implements WorkbenchOptions {
     this.extensions,
     this.themeExtensions,
     this.debugService,
-    this.commitMessage = ideClaudeCommitMessage,
+    this.commitMessage = ideCommitMessage,
     this.pinned = false,
     this.onPinnedChanged,
     this.terminalBackend = const TerminalBackend(),

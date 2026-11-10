@@ -2940,9 +2940,14 @@ class _WorkbenchState extends State<Workbench> implements WindowDelegate {
               ),
               _ => null,
             },
-            // Claude Haiku where the project is.
-            commitMessage: (prompt, {cancel}) =>
-                ideClaudeCommitMessage(prompt, cancel: cancel, location: path),
+            // The project's kernel where it answers one question at a time
+            // (dsh), else Claude Code's Haiku where the project is.
+            commitMessage: (prompt, {cancel}) => ideCommitMessage(
+              prompt,
+              cancel: cancel,
+              location: path,
+              kernel: _commitMessageKernel(path),
+            ),
             agentEdits: _ideAgentEdits.putIfAbsent(path, IdeAgentEdits.new)
               ..sessions = _agentSessionsIn(path),
             chat: shown
@@ -2982,6 +2987,17 @@ class _WorkbenchState extends State<Workbench> implements WindowDelegate {
             !identical(thread, chat))
           thread.session,
     ];
+  }
+
+  /// The kernel [path]'s commit message is asked of: the one its chat runs
+  /// on, else the one a new agent there would start on.
+  ///
+  /// A chat not opened yet is read by the kernel it was started with: asking
+  /// for a commit message does not open it (which would start its process).
+  String _commitMessageKernel(String path) {
+    final chat = _workspace.ideChat(path);
+    if (chat == null) return _workspace.preferredKernel.id;
+    return chat.isOpen ? chat.session.kernel.id : chat.kernel.id;
   }
 
   /// The sidebar docked beside [body] (by default the chat's panes).
@@ -4066,9 +4082,14 @@ class _WorkbenchState extends State<Workbench> implements WindowDelegate {
       terminalHosts: _terminals?.hosts,
       terminalSkipShell: chatTerminalSkipShell,
       onOpenTerminalLink: _openTerminalLink,
-      // Claude Haiku where the project is, as the IDE's Source Control.
-      commitMessage: (prompt, {cancel}) =>
-          ideClaudeCommitMessage(prompt, cancel: cancel, location: location),
+      // As the IDE's Source Control, of this agent's own kernel: its
+      // question, or Claude Code's Haiku where the project is.
+      commitMessage: (prompt, {cancel}) => ideCommitMessage(
+        prompt,
+        cancel: cancel,
+        location: location,
+        kernel: thread.session.kernel.id,
+      ),
       notifications: _notifications,
       workspaceName: multi?.name,
       roots: multi?.folders ?? const [],

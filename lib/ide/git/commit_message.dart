@@ -1,11 +1,15 @@
 // Generate Commit Message, as the sparkle in VS Code's Source Control input
 // does it (with Copilot): the diff of what the commit would take, cut to
 // fit, and the repository's recent messages for its conventions, to a small
-// model: Claude Haiku, through Claude Code.
+// model: the project's own agent runtime (dsh's one question, or Claude Code
+// through Claude Haiku).
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 
 import '../../kernel/claude_code/claude_haiku.dart';
+import '../../kernel/dsh/dsh_ask.dart';
+import '../../kernel/kernel_registry.dart';
 import '../../models/model_providers.dart';
 
 /// The most diff the model is given, in characters.
@@ -39,16 +43,24 @@ class IdeCommitMessageException implements Exception {
   String toString() => message;
 }
 
-/// Claude Haiku through the `claude` CLI: one turn, no tools, no session
-/// kept.
+/// Asks the agent runtime [kernel] the project runs on, one message: the
+/// dsh on this machine's one question where it is DSH, Claude Code's Haiku
+/// otherwise.
 ///
-/// It runs where [location] is (the project's): on its host for a remote
-/// one.
-Future<String> ideClaudeCommitMessage(
+/// A dsh asks on the machine the app runs on, where [location] is not: DSH
+/// is offered for this machine's projects only (see `KernelRegistry.dsh`).
+///
+/// A test stands in for the dsh by [dshCommitMessageAsker]: the real one
+/// starts a process.
+Future<String> ideCommitMessage(
   IdeCommitMessagePrompt prompt, {
   Future<void>? cancel,
   String? location,
+  String kernel = KernelRegistry.claudeCodeId,
 }) async {
+  if (kernel == KernelRegistry.dshId) {
+    return _askDsh(prompt, cancel: cancel);
+  }
   try {
     // The auxiliary model; automatic, new sessions' default.
     final models = ModelProviders.current;
@@ -68,6 +80,32 @@ Future<String> ideClaudeCommitMessage(
     throw IdeCommitMessageException(error.message);
   }
 }
+
+/// Asks dsh, as [ideCommitMessage] does when the kernel is DSH's: its answer,
+/// cleaned as a message, or why it gave none.
+Future<String> _askDsh(
+  IdeCommitMessagePrompt prompt, {
+  Future<void>? cancel,
+}) async {
+  try {
+    final reply = await (dshCommitMessageAsker ?? askDsh)(
+      prompt.system,
+      prompt.user,
+      cancel: cancel,
+    );
+    return ideCleanCommitMessage(reply);
+  } on DshAskCancelled {
+    throw const IdeCommitMessageCancelled();
+  } on DshAskException catch (error) {
+    throw IdeCommitMessageException('$error');
+  }
+}
+
+/// Asks dsh [system] and [prompt], as the commit message does: the real one,
+/// or a test's — which must not start a process.
+@visibleForTesting
+Future<String> Function(String system, String prompt, {Future<void>? cancel})?
+dshCommitMessageAsker;
 
 /// One line, so that it passes through a shell unchanged.
 const _system =

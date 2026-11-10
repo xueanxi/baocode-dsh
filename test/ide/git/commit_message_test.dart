@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:baocode/ide/git/ide_git_commit_panel.dart';
 import 'package:baocode/ide/git/commit_message.dart';
+import 'package:baocode/kernel/dsh/dsh_ask.dart';
+import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/ide/ide_input.dart';
 import 'package:baocode/ide/ide_list.dart';
 
@@ -101,6 +103,68 @@ void main() {
       expect(ideCleanCommitMessage('```\nFix it\n```'), 'Fix it');
       expect(ideCleanCommitMessage('"Fix it"\n'), 'Fix it');
       expect(ideCleanCommitMessage('Fix it\n\n- more'), 'Fix it\n\n- more');
+    });
+  });
+
+  group('the model in use', () {
+    tearDown(() => dshCommitMessageAsker = null);
+
+    const prompt = IdeCommitMessagePrompt('Write the message.', 'the diff');
+
+    test('dsh answers it where the project runs on DSH', () async {
+      final asked = <(String, String)>[];
+      dshCommitMessageAsker = (system, message, {cancel}) async {
+        asked.add((system, message));
+        return '```\nAdd a\n```';
+      };
+
+      final reply = await ideCommitMessage(
+        prompt,
+        kernel: KernelRegistry.dshId,
+      );
+
+      expect(reply, 'Add a');
+      expect(asked.single, (
+        'Write the message.',
+        'the diff',
+      ), reason: 'the question as it was written, cleaned afterwards');
+    });
+
+    test('a dsh that gives no answer is reported in its words', () async {
+      dshCommitMessageAsker = (system, message, {cancel}) async =>
+          throw const DshAskException('dsh gave no answer (exit 0).');
+
+      await expectLater(
+        ideCommitMessage(prompt, kernel: KernelRegistry.dshId),
+        throwsA(
+          isA<IdeCommitMessageException>().having(
+            (error) => error.message,
+            'message',
+            'dsh gave no answer (exit 0).',
+          ),
+        ),
+      );
+    });
+
+    test('cancelling it is the input\'s cancel, not an error', () async {
+      dshCommitMessageAsker = (system, message, {Future<void>? cancel}) async {
+        await cancel;
+        throw const DshAskCancelled();
+      };
+      final cancel = Completer<void>();
+      final asked = ideCommitMessage(
+        prompt,
+        kernel: KernelRegistry.dshId,
+        cancel: cancel.future,
+      );
+
+      // The cancel as the input's sparkle sends it, while the ask waits.
+      final expected = expectLater(
+        asked,
+        throwsA(isA<IdeCommitMessageCancelled>()),
+      );
+      cancel.complete();
+      await expected;
     });
   });
 

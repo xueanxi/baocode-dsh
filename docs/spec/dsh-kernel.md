@@ -52,6 +52,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 | F26 | Windows 上 base 禁用 `tool-bash` 与 `bash-sandbox`，启用 `tool-pwsh`/`pwsh-sandbox`；`dsh-gitbash-shell` 装在 web profile 的 node_modules，acp profile 解析不到，补丁里引用它会被静默忽略（实测：仍是 pwsh） |
 | F27 | read-only 档位在 Windows 上通过 PowerShell 的 ConstrainedLanguage 限制 pwsh（实测报 "Only core types are supported in this language mode"）；若装了 gitbash 插件，其执行器在 win32 是 **unconfined**，该档位不限制 bash |
 | F28 | 补丁层改不了一个已存在 id 的 `name`：`- id: bash-sandbox` + `name: dsh-gitbash-shell/shell` 被跳过（stderr：`patch: name mismatch for "bash-sandbox" (expected "@deepseek-ai/dsh-bash-sandbox", got "dsh-gitbash-shell/shell"), skipping`），因为 `bash-sandbox` 在 base 里属于官方 `@deepseek-ai/dsh-bash-sandbox`。`dsh-gitbash-shell` 0.38.5 自己的 bundle patch 已 insert `gitbash-executor`（`bashPath: ''` = 自动解析，本机解析到 `D:/tools/git/Git/bin/bash.exe`，source `path-git`），所以补丁只需 `tool-bash: disabled: false`。另：0.52.0 的 peer 要求 dsh ≥ 0.2.2-rc.1，装 0.2.0-rc.2 会被拒 |
+| F29 | 一次性问答（`--profile headless --patch … --json -`，任务走 stdin）：stdout 是逐行事件，答案在最后一个 `{"type":"final","text":…}`；`thinking` 单独一条事件，不经 `--json` 时会混进 stdout，所以必须用 `--json` 只取 `final`。`agent-default-model` 的 `config`（默认 `deepseek-official`/`deepseek-flash`）决定它的模型；`session-persistence-jsonl.config.root` 可以改会话落点（实测指到临时目录后 `~/.dsh/sessions` 不新增），指到临时目录时不再有 `session-checkpoint-policy` 的 "did not activate" 警告（`disabled: true` 会警告）；进程退出码与 `status` 的 `turn_end.reason.error.message` 说明失败（模型 id 不存在时实测 exit 1、`final.text` 空、stderr 一行 503）；本机一次问答约 6.3 s |
 
 ## 4. User Stories
 
@@ -274,6 +275,17 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - **id**：读回历史里的 `message:<n>` / `thought:<n>` 让翻译层从最大的 n 继续；新进程从 1 数起会覆盖旧条目。
 - **删除**：`DshCatalog.delete` 只删本地这对文件；dsh 自带的 session 文件仍在，dsh web 仍能看到。本版本之前建的会话没有本地记录，不会出现在侧栏。
 - **限制**：本地历史是快照。在 dsh web 里接着说过的内容不会进入这份快照；继续对话时 dsh 自己的上下文仍是完整的，只是 BaoCode 界面看不到那几轮。
+### 5.14 应用自己问的一句话
+
+「生成提交消息」这类**应用自己问**的请求，原来固定走 Claude Code 的 Haiku（`ideClaudeCommitMessage` → `askClaudeHaiku`）。本机 `claude.exe` 被策略按文件名静默拦截（退出码 0、零输出），于是这个功能只能报错；DSH 能跑，却没人问它。
+
+- **路由按内核走**：`ideCommitMessage(kernel:)` 里 `dsh` → `askDsh`，其余内核 → 原来的 Claude 路径。内核由工作台取「该项目 IDE 里那个 chat 的内核」，没有 chat 时取 `Workspace.preferredKernel`（`_commitMessageKernel`）。不改 `IdeCommitMessageModel` 的形状，SCM 输入框、提交面板、rebase/merge 弹窗的 AI 都因此一起换过去。
+- **一次性问答走 `headless`，不走 ACP**：ACP 的 `session/new` 会在 `~/.dsh` 落一个会话（F25），而这是**应用自己的**请求，不该出现在用户的会话列表里；`headless` 是 dsh 自带的一次性 profile（"answer one task and exit"）。
+- **不落会话的做法**：`DshPatch.askContent` 把 `session-persistence-jsonl.root` 指到本次运行的临时目录，并关掉 `session-title-llm`；进程退出后整目录删除（F29 实测 `~/.dsh/sessions` 不新增）。补丁每次现写（路径里有临时目录），不缓存。
+- **不给它工具的空子**：`DSH_PERMISSION_MODE=read-only`、cwd 就是临时目录，`system-prompt` 关掉 identity 与 runtime context、persona 改成"一次回答、不要工具"；即使模型仍去调工具，读到的也只是个空目录，写入会被拒（F23 的 `ask` 无人应答即拒）。
+- **解析只认 `final`**：`dshAskAnswer` 取最后一个 `final.text`；空则用 `turn_end.reason.error.message`，再退到 stderr 尾部（`DshRedact` 过），最后是 `dsh gave no answer (exit N).`。
+- **不做跨内核回退**：内核是 Claude Code 就仍问 Claude（哪怕它的 CLI 在这台机器上坏了），是 DSH 就问 DSH；失败照原话报出。跨内核偷偷换模型会让"我的提交消息是谁写的"说不清。
+- **局限**：每次约 6 秒（起 node + 一次模型调用）；远端项目与多文件夹工作区不提供 DSH，自然仍走 Claude；会话标题、提示词润色、Stash AI 这类同源调用**这次没动**，仍走 `askClaudeHaiku`。
 
 ## 6. Testing Decisions
 
@@ -297,6 +309,8 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - `dsh_restart_test.dart`：重启后 resume 而非 new、历史与标题的读写、`message:<n>` 续号、`DshCatalog` 列项、文件账本与删除
 - `kernel_ui_test.dart`（追加）：选择器两个内核、默认 Claude、首条消息后锁定、权限档位首条消息后只剩一项、图片开关随 `supportsImages`
 - `l10n_test.dart`（追加）：三档中文标签
+- `ask_test.dart`：一次性问答的 argv（headless、`--json`、任务走 stdin 的 `-`）、只取 `final` 的文本、空答案的三种说明（`turn_end` 的错误、stderr、退出码）、非事件行忽略
+- `commit_message_test.dart`（追加）：内核是 DSH 时问 dsh 并清洗回复、dsh 的错误原话上报、取消映射成取消（Claude 路径不动）
 - `settings` 测试：`dshCode.path` 往返
 
 不跑：真实 dsh 进程、全量套件、`-t e2e`。命令：`dart format <改动文件>` → `flutter analyze --fatal-infos` → `flutter test <本票文件>`。
@@ -338,6 +352,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 8. 跨内核的“上次选择”按 kind 全局保存，切内核后可能要重选档位/模型（DSH 会丢弃不认识的 id）。
 9. dsh 的用量不进 BaoCode 的用量账本。
 10. 视图切换会结束进程再 resume，回来时要重新等握手（约 6 秒）。
+11. 应用自己的提问（提交消息）每次起一次 `headless`，约 6 秒；只在那一个内核是 DSH 的项目里如此。
 
 ## 10. Further Notes
 

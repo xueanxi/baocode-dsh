@@ -13,8 +13,13 @@ import '../remote/remote_location.dart';
 /// The kernels the user can pick from. Another kernel is an adapter and a
 /// line here.
 abstract final class KernelRegistry {
+  /// The ids the kernels are known by, where a value has to be a constant
+  /// (a default, a saved preference): the same the descriptors below carry.
+  static const claudeCodeId = 'claude-code';
+  static const dshId = 'dsh';
+
   static final KernelDescriptor claudeCode = KernelDescriptor(
-    id: 'claude-code',
+    id: claudeCodeId,
     label: 'Claude Code',
     icon: Icons.auto_awesome_rounded,
     description: 'Anthropic’s coding agent',
@@ -35,7 +40,7 @@ abstract final class KernelRegistry {
   /// DeepSeek Harness, on this machine only: its process works in one
   /// project folder, and needs a dsh installed here (see `dsh_locate.dart`).
   static final KernelDescriptor dsh = KernelDescriptor(
-    id: 'dsh',
+    id: dshId,
     label: 'DSH',
     icon: Icons.auto_awesome_rounded,
     description: 'DeepSeek Harness',

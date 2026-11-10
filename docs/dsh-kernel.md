@@ -182,6 +182,22 @@ TurnEnded(turnId, interrupted:, worked:)
 - 原子写；POSIX 上目录 0700、文件 0600（Windows 继承用户目录 ACL）。**不要手改**：下次启动会按内容重建，改了也会被覆盖。
 - `--patch` 必须传绝对路径：相对路径按被启动进程的 cwd 解析（F21）。补丁是**可执行配置**，id 命中的条目会整体替换其 `config`（不深合并），已有 id 的 `name` 被忽略；引用了没安装的插件会被**静默忽略**，进程照常启动（F21）。
 
+### 应用自己问的一句话（`ask.patch.yml`）
+
+「生成提交消息」这类**应用自己问**的一句话（不是对话的一轮），在项目内核是 DSH 时由 dsh 回答，不再走 Claude Code 的 Haiku：一次
+
+```bash
+node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
+```
+
+任务写在 stdin，答案取最后一个 `final` 事件的 `text`——`thinking`（模型的思考）与 `status`（步骤）都丢掉。
+
+- 补丁由 `DshPatch.askContent` **每次提问现写**，落在本次运行的临时目录里（`<系统临时目录>/baocode-dsh-ask-<pid>-<n>/ask.patch.yml`）：`llm-pi-ai` 路由与 ACP 那份**同一个 provider 和模型**，`agent-default-model` 指到它，`session-persistence-jsonl.root` 指到该目录下的 `sessions/`，并关掉 `session-title-llm`（起标题是又一次模型请求，这里没人看标题）。
+- 进程结束整目录删掉，所以 **`~/.dsh/sessions` 里不会多出会话**——这条是硬要求，不是优化。
+- 提问的 cwd 也是那个临时目录：dsh 的沙箱根在那里，`DSH_PERMISSION_MODE=read-only` 由 BaoCode 写上——没有人守着审批，越界请求会被拒（F23）。
+- 一次约 6 秒（实测 6.3 s：起 node + 一次模型调用）；取消或超时（2 分钟）连同进程树一起结束。
+- 内核是 Claude Code 的项目**仍然走 Claude Code 的 Haiku**；没有跨内核回退：DSH 答不上就照它的话报出来（缺 `STEPCODEV2_API_KEY` 时预检直接说，不起进程）。
+
 ## 8. 排障
 
 按原因排，不要先怀疑 UI。
@@ -210,6 +226,17 @@ TurnEnded(turnId, interrupted:, worked:)
 会话里出现 error 提示：`dsh has no credential for STEPCODEV2_API_KEY; add it in dsh web (Models) or set the environment variable.`。这不是启动失败，进程照常起，每轮会以 `MISSING_CREDENTIAL: …` 失败。修法：在 **dsh web → Models** 里给该 provider 写入 key，或用环境变量提供同名 ref。BaoCode 不复制、不读取 key 的值。
 
 同一条提示每个会话只说一次（`notice:credential:<ref>`）。
+
+### 生成提交消息报 dsh 的错
+
+项目内核是 DSH 时，「生成提交消息」走的是 `headless` 一次性问答（§7）。界面上是一条 error 通知，文本就是 dsh 的话：
+
+- `DSH is not installed…`：与对话那条同样的定位问题（§8「找不到 dsh」）；
+- `dsh has no credential for STEPCODEV2_API_KEY…`：预检在起进程之前就说了，没花模型调用；
+- `dsh gave no answer (exit N).`：它退出了却没打印 `final` 事件，常见于路由/额度/模型 id 的问题——文本后面会带 dsh 的 stderr 尾部（已脱敏）；
+- `dsh did not answer within N minutes.`：超时被杀；先看 dsh web 里同一个模型能不能答。
+
+它不落会话：若在 dsh web 的会话列表里看到提交消息这类会话，说明有人把补丁的 `session-persistence-jsonl.root` 改回去了（不要手改补丁，见 §7）。
 
 ### resume 失败
 
@@ -254,6 +281,7 @@ resume 不会重放历史，也不会改权限档位（F16）。
 flutter analyze --fatal-infos
 dart format --output=none --set-exit-if-changed <改动的 .dart 文件>
 flutter test test/kernel/dsh_integration_test.dart
+flutter test test/kernel/dsh/ask_test.dart test/kernel/dsh/patch_test.dart
 node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 ```
 
@@ -277,6 +305,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 设置 → 通用 → DSH 的路径能覆盖；清空后回到自动发现
 - [ ] 退出应用再打开：侧栏仍有这个 DSH 对话，点开能看到刚才的消息，接着发能继续
 - [ ] 删除这个 DSH 对话后重启：侧栏不再出现（`~/.dsh` 里的 session 仍在，dsh web 还看得到）
+- [ ] 内核选 DSH 的项目里「生成提交消息」有结果（约 6 秒），dsh web 的会话列表**没有**多出这次提问
 
 ## 10. 接第三个内核
 
@@ -299,7 +328,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 | 路径 | 职责 |
 |---|---|
 | `lib/kernel/dsh/dsh_locate.dart`、`dsh_locate_io.dart` | 定位 dsh，解析 shim、设置值、平台 npm 全局根，读 `package.json` 版本 |
-| `lib/kernel/dsh/dsh_patch.dart` | 生成/缓存 ACP 补丁，原子写、权限位、bash 两行的条件；`contextWindow`（上下文窗口初值的唯一一处） |
+| `lib/kernel/dsh/dsh_patch.dart` | 生成/缓存 ACP 补丁，原子写、权限位、bash 两行的条件；`askContent`（一次性问答的补丁）；`contextWindow`（上下文窗口初值的唯一一处） |
+| `lib/kernel/dsh/dsh_ask.dart`、`dsh_ask_io.dart` | 一次性问答：`headless` 的 argv、`final` 事件的解析、起进程与收尾（临时目录、会话根、read-only、超时/取消） |
 | `lib/kernel/dsh/dsh_bash.dart` | 找本机 Git 的 `bash.exe`：`BAOCODE_GIT_BASH` → 登录 shell 的 PATH（跳过 WSL 的那份）→ `git --exec-path` 所属 Git → Program Files 里的 Git |
 | `lib/kernel/dsh/dsh_transport.dart`、`dsh_transport_io.dart` | 子进程传输：按行 JSON-RPC、stderr 环（落库前脱敏）、退出消息、进程树收尾与登记 |
 | `lib/kernel/dsh/dsh_kernel.dart` | 适配器：握手、会话创建/续接、选项、健康、生命周期、审批接线；会话账本与历史回读的接线 |
@@ -309,14 +339,14 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 | `lib/kernel/dsh/dsh_notices.dart` | 会话内提示（版本、凭据、图片）与凭据 refs 预检 |
 | `lib/kernel/dsh/dsh_path_setting.dart` | `dshCode.path` 的解析与 `current` 缝 |
 | `lib/kernel/dsh/mock_dsh_transport.dart` | 测试用的脚本化 dsh 进程 |
-| `lib/kernel/kernel_registry.dart` | `dsh` 描述符、注册顺序、`available` 谓词 |
+| `lib/kernel/kernel_registry.dart` | `dsh` 描述符、注册顺序、`available` 谓词、内核 id 常量 |
 | `lib/settings/pages/general_page.dart` | 设置 → 通用 → DSH 分组 |
 | `lib/main.dart` | 启动回收、退出收尾、路径设置的 `current` |
 | `tool/dsh_smoke.mjs` | 手动 smoke（花一次模型调用，不进 CI） |
 
 测试：
 
-- `test/kernel/dsh/`（`locate_test.dart`、`patch_test.dart`、`transport_test.dart`）：定位（含开头的 `~` 展开）、补丁、传输的纯函数与临时目录测试，以及 stderr 脱敏；
+- `test/kernel/dsh/`（`locate_test.dart`、`patch_test.dart`、`transport_test.dart`、`ask_test.dart`）：定位（含开头的 `~` 展开）、补丁（ACP 与一次性问答两份）、传输与问答的纯函数和临时目录测试，以及 stderr 脱敏；
 - `test/kernel/dsh_kernel_test.dart`：握手、会话时机、模型、健康、权限锁定、release/resume、能力随进程复位；
 - `test/kernel/dsh_turn_test.dart`：一轮的事件顺序（含带图时提示在同一轮内、握手前发图等握手）、文本、思考、工具、usage、错误、取消；
 - `test/kernel/dsh_approval_test.dart`：审批的挂起、三种应答线形、理由回退、迟到应答；
@@ -325,4 +355,5 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - `test/kernel/dsh_capabilities_test.dart`、`dsh_notices_test.dart`：能力声明与提示去重、凭据预检；
 - `test/kernel/dsh_bash_test.dart`：Git Bash 的发现顺序、跳过 WSL、无 git 时不跑 git、POSIX 返回 null；
 - `test/kernel_ui_test.dart`：选择器、权限档位锁定、图片开关等界面接缝；
+- `test/ide/git/commit_message_test.dart`（追加）：内核是 DSH 时问 dsh 并清洗回复、dsh 的错误原话上报、取消映射成取消；
 - `test/settings/dsh_page_test.dart`：`dshCode.path` 的往返。

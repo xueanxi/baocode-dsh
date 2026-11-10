@@ -20,9 +20,22 @@ import 'dsh_locate.dart';
 /// written out in full rather than leaning on what the profile already has.
 /// It holds no key: the credentials stay in `~/.dsh` (F24), read by dsh
 /// itself.
+///
+/// A second patch, written for the app's own one question ([askContent]),
+/// routes dsh's `headless` profile through the same provider and model: what
+/// writes a commit message is the model the conversation runs on.
 abstract final class DshPatch {
   /// The patch file [ensure] writes in the folder it is given.
   static const fileName = 'acp.patch.yml';
+
+  /// The patch file one question is asked with (`dsh_ask_io.dart`), written
+  /// for that one run in its own folder (see [askContent]).
+  static const askFileName = 'ask.patch.yml';
+
+  /// The provider dsh's route reads, and the model it runs: one for the
+  /// conversation and for the app's own questions.
+  static const providerId = 'stepcodev2';
+  static const modelId = 'deepseek-v4.1-flash';
 
   /// The credential ref dsh's route reads its key from (F24): written below as
   /// that provider's `apiKeyEnv`, and the name dsh keeps the key under, which
@@ -43,32 +56,80 @@ abstract final class DshPatch {
   /// The patch for a dsh at [version]; [withBash] turns the `bash` tool on.
   /// dsh disables it on Windows, and the Git Bash executor the plugin mounts
   /// is what serves it.
-  static String content({required String version, bool withBash = false}) {
-    final lines = [
-      header(version),
-      '',
-      '- id: llm-pi-ai',
-      "  name: '@deepseek-ai/dsh-llm-pi-ai'",
-      '  config:',
-      '    providers:',
-      '      stepcodev2:',
-      '        displayName: stepcodev2',
-      '        apiKeyEnv: $credentialRef',
-      '        api: openai-completions',
-      '        baseURL: https://i-ai-gw.stepx.com/v1',
-      '        models:',
-      '          - id: deepseek-v4.1-flash',
-      '            name: deepseek-v4.1-flash',
-      '            contextWindow: $contextWindow',
-      '            input: [text, image]',
-      '- id: acp',
-      "  name: '@deepseek-ai/dsh-acp'",
-      '  inject: [acpAppStartup]',
-      '  config:',
-      '    provider: stepcodev2',
-      '    model: deepseek-v4.1-flash',
-      if (withBash) ...['- id: tool-bash', '  disabled: false'],
-    ];
+  static String content({required String version, bool withBash = false}) =>
+      _patch([
+        header(version),
+        '',
+        ..._route,
+        '- id: acp',
+        "  name: '@deepseek-ai/dsh-acp'",
+        '  inject: [acpAppStartup]',
+        '  config:',
+        '    provider: $providerId',
+        '    model: $modelId',
+        if (withBash) ...['- id: tool-bash', '  disabled: false'],
+      ]);
+
+  /// The patch one question is asked with, for a dsh at [version] (see
+  /// `dsh_ask.dart`): [content]'s provider and model, over the `headless`
+  /// profile, told to answer in one reply and to reach for nothing; the
+  /// session dsh writes for that one answer goes under [sessionRoot], this
+  /// run's own folder, rather than `~/.dsh` — the question is the app's, and
+  /// none of it belongs in the user's sessions.
+  ///
+  /// Its session's title is not asked of the model: a title is another
+  /// request, and nothing lists the session this run makes.
+  static String askContent({
+    required String version,
+    required String sessionRoot,
+  }) => _patch([
+    header(version),
+    '',
+    ..._route,
+    // dsh's own default model is its upstream's: the route above is what its
+    // questions go by.
+    '- id: agent-default-model',
+    '  config:',
+    '    provider: $providerId',
+    '    model: $modelId',
+    '- id: system-prompt',
+    '  config:',
+    '    includeHarnessIdentity: false',
+    '    includeRuntimeContext: false',
+    '    personaPrefix: >-',
+    '      Answer the message in one reply, with the answer alone: no',
+    '      preamble, no commentary, and no tools.',
+    "    personaSuffix: ''",
+    '- id: session-title-llm',
+    '  disabled: true',
+    '- id: session-persistence-jsonl',
+    '  config:',
+    // Quoted: a Windows path starts with a drive letter and a colon.
+    "    root: '${sessionRoot.replaceAll(r'\', '/')}'",
+  ]);
+
+  /// The provider and model both patches route through, as a patch entry:
+  /// written out whole, a patch replacing a plugin's `config` (F21).
+  static const _route = [
+    '- id: llm-pi-ai',
+    "  name: '@deepseek-ai/dsh-llm-pi-ai'",
+    '  config:',
+    '    providers:',
+    '      $providerId:',
+    '        displayName: $providerId',
+    '        apiKeyEnv: $credentialRef',
+    '        api: openai-completions',
+    '        baseURL: https://i-ai-gw.stepx.com/v1',
+    '        models:',
+    '          - id: $modelId',
+    '            name: $modelId',
+    '            contextWindow: $contextWindow',
+    '            input: [text, image]',
+  ];
+
+  /// [lines] as the patch file's text, a newline at its end; a YAML tag in it
+  /// — a `!!` in a name a machine wrote — throws rather than going in.
+  static String _patch(List<String> lines) {
     final text = '${lines.join('\n')}\n';
     if (text.contains('!!')) {
       // A YAML tag where a machine wrote a version: never in a patch of ours,
