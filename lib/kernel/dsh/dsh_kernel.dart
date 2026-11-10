@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../chat/chat_models.dart';
 import '../../platform/data_dir.dart';
+import '../../settings/user_settings.dart';
 import '../../usage/usage_ledger.dart';
 import '../agent_kernel.dart';
 import '../kernel_event.dart';
@@ -233,6 +234,24 @@ class DshKernel
   Map<String, Object?>? _effortOption;
   String? _reportedModel;
   String? _reportedEffort;
+
+  /// Where dsh's model option, as its last session reported it, is kept
+  /// between runs (main.dart sets it); null keeps it for this run alone.
+  static GlobalStorage? get modelCache => _modelCache;
+  static set modelCache(GlobalStorage? storage) {
+    _modelCache = storage;
+    _keptOnce = null;
+  }
+
+  static GlobalStorage? _modelCache;
+
+  /// The key it is kept under: dsh's model option, its choices and all.
+  static const modelCacheKey = 'dshCode.models';
+
+  /// That option, read once per run: what the picker shows before this run's
+  /// first session is made, which is when dsh lists them (F6). A session's
+  /// own report replaces it.
+  static Map<String, Object?>? _keptOnce;
 
   /// What the user picked and dsh was not told yet (or not told at all,
   /// before a session exists): shown as picked until dsh reports it.
@@ -1176,7 +1195,7 @@ class DshKernel
   @override
   late final KernelChoiceSource model = _Choice(
     options: () => [
-      for (final choice in _choicesOf(_modelOption))
+      for (final choice in _choicesOf(_modelOption ?? _readKeptModelOption()))
         KernelOption(
           '${choice.value['value']}',
           '${choice.value['name'] ?? choice.value['value']}',
@@ -1187,7 +1206,15 @@ class DshKernel
               : KernelOptionGroup(choice.group!, choice.groupName ?? ''),
         ),
     ],
-    selected: () => _wantedModel ?? _reportedModel,
+    selected: () {
+      final option = _modelOption ?? _readKeptModelOption();
+      // Picked before this session existed: shown as picked while the last
+      // session listed it; otherwise what that one had, until this one says.
+      if (_wantedModel case final model? when _offers(option, model)) {
+        return model;
+      }
+      return _reportedModel ?? _currentOf(option);
+    },
     select: _selectModel,
   );
 
@@ -1278,6 +1305,7 @@ class DshKernel
     _effortOption = _optionNamed(options, 'reasoning_effort');
     _reportedModel = _currentOf(_modelOption);
     _reportedEffort = _currentOf(_effortOption);
+    if (_modelOption case final option?) _keepModelOption(option);
     // A pick dsh does not offer is not its own: the last one used was
     // another kernel's, and is dropped (§5.2).
     if (_wantedModel != null && !_offers(_modelOption, _wantedModel!)) {
@@ -1289,6 +1317,32 @@ class DshKernel
     if (_wantedModel == _reportedModel) _wantedModel = null;
     if (_wantedEffort == _reportedEffort) _wantedEffort = null;
     emitInfoChanged();
+  }
+
+  /// [modelCache]'s model option, read on its first use this run: dsh has
+  /// listed none until a session is made.
+  static Map<String, Object?>? _readKeptModelOption() {
+    if (_keptOnce != null) return _keptOnce;
+    // Kept as dsh wrote it: an option with the choices it offered.
+    final kept = _modelCache?.get<Map<String, Object?>>(modelCacheKey);
+    if (kept == null || kept['options'] is! List) return null;
+    return _keptOnce = kept;
+  }
+
+  /// Keeps [option], dsh's model option, for the picker of the next run.
+  static void _keepModelOption(Map<String, Object?> option) {
+    final storage = _modelCache;
+    if (storage == null) return;
+    if (jsonEncode(_readKeptModelOption()) == jsonEncode(option)) return;
+    // This run's next session shows it as soon as it is listed.
+    _keptOnce = option;
+    unawaited(
+      storage
+          .set(modelCacheKey, option)
+          .catchError(
+            (Object error) => debugPrint('$modelCacheKey not kept: $error'),
+          ),
+    );
   }
 
   /// Tells dsh the picks it does not have in effect: the options picked

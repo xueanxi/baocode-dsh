@@ -59,6 +59,7 @@ import 'kernel/claude_code/turn_stats_stub.dart'
     if (dart.library.io) 'kernel/claude_code/turn_stats_io.dart'
     show turnStatsIn;
 import 'kernel/commit_attribution.dart';
+import 'kernel/dsh/dsh_kernel.dart';
 import 'kernel/dsh/dsh_path_setting.dart';
 import 'kernel/dsh/dsh_transport.dart';
 import 'kernel/extension_switches.dart';
@@ -547,6 +548,9 @@ void followSettingsFiles(SettingsFiles files) {
   // Claude Code's own models as it last listed them: in the picker
   // before a session on them starts.
   ClaudeCodeKernel.modelCache = files.storage;
+  // Likewise dsh's, which it lists with a session: in the picker before
+  // this run's first one is made.
+  DshKernel.modelCache = files.storage;
   // Whether the welcome to setting a model up has shown by itself.
   ModelWelcome.storage = files.storage;
   // What each turn took and spent, for its footer when the session is

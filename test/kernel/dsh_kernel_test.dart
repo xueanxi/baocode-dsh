@@ -19,6 +19,7 @@ import 'package:baocode/kernel/kernel_event.dart';
 import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/kernel_types.dart';
 import 'package:baocode/platform/data_dir.dart';
+import 'package:baocode/settings/user_settings.dart';
 import 'package:baocode/usage/usage_ledger.dart';
 import 'package:baocode/usage/usage_record.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -338,6 +339,100 @@ void main() {
       expect(kernel.model.selected, '["stepcodev2","deepseek-v4.1-flash"]');
     },
   );
+
+  test('the models kept from the last run are picked before this one makes a '
+      'session, and its own report replaces them', () async {
+    final folder = await Directory.systemTemp.createTemp('dsh_models');
+    final storage = GlobalStorage(
+      '${folder.path}/storage.json',
+      debounce: Duration.zero,
+    );
+    await storage.load();
+    DshKernel.modelCache = storage;
+    addTearDown(() async {
+      DshKernel.modelCache = null;
+      // The kernel's last write may still be settling: Windows will not let
+      // the folder go while its temp file is open.
+      for (var attempt = 0; ; attempt++) {
+        try {
+          await folder.delete(recursive: true);
+          return;
+        } on FileSystemException {
+          if (attempt == 50) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      }
+    });
+
+    // A run whose session lists them: the list is kept.
+    final first = _FakeDsh(
+      models: const {
+        'stepcodev2': ['deepseek-v4.1-flash', 'deepseek-v4-pro'],
+      },
+    );
+    final one = first.kernel();
+    final events = _listen(one);
+    one.prepare();
+    await settled(() => one.health.status == KernelHealthStatus.ready);
+    one.send(KernelTurn(id: 'turn-1', text: 'Hello'));
+    await settled(() => events.whereType<TurnEnded>().isNotEmpty);
+    await settled(
+      () => storage.get<Map<String, Object?>>(DshKernel.modelCacheKey) != null,
+    );
+
+    // The next run, with no session yet: the picker has them to show.
+    DshKernel.modelCache = storage;
+    final second = _FakeDsh(
+      models: const {
+        'stepcodev2': [
+          'deepseek-v4.1-flash',
+          'deepseek-v4-pro',
+          'deepseek-v4-lite',
+        ],
+      },
+    );
+    final two = second.kernel();
+    final next = _listen(two);
+    two.prepare();
+    await settled(() => two.health.status == KernelHealthStatus.ready);
+    expect(two.sessionId, isNull);
+    expect(
+      [for (final option in two.model.options) option.id],
+      [
+        '["stepcodev2","deepseek-v4.1-flash"]',
+        '["stepcodev2","deepseek-v4-pro"]',
+      ],
+    );
+    expect(two.model.options.first.group?.id, 'stepcodev2');
+    expect(two.model.selected, '["stepcodev2","deepseek-v4.1-flash"]');
+
+    // Picked before the session exists, and set on it once made.
+    const other = '["stepcodev2","deepseek-v4-pro"]';
+    two.model.select(other);
+    expect(two.model.selected, other);
+    two.send(KernelTurn(id: 'turn-2', text: 'Hello'));
+    await settled(() => next.whereType<TurnEnded>().isNotEmpty);
+
+    expect(
+      second.transport.requests('session/set_config_option').single['params'],
+      {'sessionId': 'session-mock', 'configId': 'model', 'value': other},
+    );
+    // Its own list, with the one it did not have before.
+    expect(
+      [for (final option in two.model.options) option.id],
+      [
+        '["stepcodev2","deepseek-v4.1-flash"]',
+        '["stepcodev2","deepseek-v4-pro"]',
+        '["stepcodev2","deepseek-v4-lite"]',
+      ],
+    );
+    // Kept before the folder goes: the write is the kernel's own.
+    await settled(
+      () =>
+          jsonEncode(storage.get<Map<String, Object?>>(DshKernel.modelCacheKey))
+              .contains('deepseek-v4-lite'),
+    );
+  });
 
   test(
     'a model picked is set on the session, and dsh is not restarted',

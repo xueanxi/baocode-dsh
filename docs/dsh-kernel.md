@@ -215,7 +215,7 @@ TurnEnded(turnId, interrupted:, worked:)
 - 取消：`session/cancel` 是通知、不回应答（F14），prompt 以 `cancelled` 收尾；prompt 还没发出去时在本地直接结束。被中断时仍在 running 的工具卡会补成 `failed`，不会一直转圈。
 - 事件 `seq` 单调递增，重启进程后延续，不复位。
 - 一次只发一个 prompt：上一轮未结束时不再发（dsh 会 `-32602`）；这期间用户发的消息进内核队列，等当前轮结束后依次发（§5 第 22 条）。同一个 `turnId` 只跑一次。
-- 模型选项按 provider 分组，值是 `JSON.stringify([provider, model])` 的不透明串（F6）。选择走 `session/set_config_option`，dsh 拒绝时以它返回的 `currentValue` 为准。
+- 模型选项按 provider 分组，值是 `JSON.stringify([provider, model])` 的不透明串（F6）。选择走 `session/set_config_option`，dsh 拒绝时以它返回的 `currentValue` 为准。会话建立前，选择器显示上一次会话报的列表（`state/storage.json` 的 `dshCode.models`），首条消息后换成 dsh 当下报的 `configOptions`。
 - 没有命令面：`initialize` 与 `session/*` 不带 `availableCommands`，dsh 也从不发 `available_commands_update`（F30）。`/` 菜单里的 skill 是内核读 dsh 的 skill 根得到的（§2），`/名字` 由 dsh 的 `agent/pre-step` 在用户消息正文里认领并加载。
 
 `session/resume {sessionId, cwd}` 不重放历史（F15）。错误分四种：`session is already active`（同进程，`-32602`）与 `already owned by an active write handle`（跨进程旧锁，`-32603`）可以重试——内核先 `await` 旧进程退出，再重试一次；`not resumable`（未知会话/子代理会话）与 `session cwd does not match`（cwd 不符）是致命的，显示为本轮错误。旧进程退出后跨进程 resume 成功（Windows 无锁文件，进程亡即释放）。
