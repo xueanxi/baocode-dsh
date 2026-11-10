@@ -5,7 +5,6 @@ import 'package:path/path.dart' as p;
 
 import '../../chat/chat_models.dart';
 import '../kernel_event.dart';
-import 'dsh_patch.dart';
 
 /// What dsh's route, and this adapter, have to tell the conversation that the
 /// agent itself did not: a dsh older than the one probed, a credential that
@@ -119,9 +118,10 @@ class DshNotices {
   }
 }
 
-/// The credential refs dsh can resolve, as ~/.dsh's credentials file names
-/// them; overridden in tests, which must not read the user's own.
-typedef DshCredentialRefs = Future<Set<String>> Function();
+/// Whether dsh can resolve one credential ref: its key in the environment
+/// dsh is started with, or a key of that name in its own store. Given in a
+/// test, which must not read the user's own.
+typedef DshCredentialCheck = Future<bool> Function(String ref);
 
 /// Whether dsh has a key for the ref its route reads, before a turn is left to
 /// fail over it (§5.3): the variable itself, or a key of that name in dsh's
@@ -134,18 +134,18 @@ abstract final class DshCredentials {
   /// (F24).
   static const fileName = '.credentials.yaml';
 
-  /// The refs dsh can resolve, for [environment], the one the process is
-  /// started with: the name of the route's key where the environment sets it,
-  /// else the names its store lists under `refs` — never a value (§5.3).
+  /// Whether dsh can resolve [ref], under [environment] — the one the process
+  /// is started with —: the variable itself where it is set, else a key of that
+  /// name in the store the environment points at. Only a name is read there,
+  /// never a value (§5.3, §5.11).
   ///
   /// The preflight `DshKernel` makes when none is injected; a test injects its
   /// own — `DshKernel(credentials:)` is the only way in — since this one looks
   /// at the machine it runs on.
-  static DshCredentialRefs refs({Map<String, String> environment = const {}}) =>
-      () async => {
-        if (await _has(DshPatch.credentialRef, environment: environment))
-          DshPatch.credentialRef,
-      };
+  static DshCredentialCheck check({
+    Map<String, String> environment = const {},
+  }) =>
+      (ref) => _has(ref, environment: environment);
 
   /// Whether dsh has a key for [ref] in [environment] — the login shell's,
   /// which the process is started with — or in the store that environment

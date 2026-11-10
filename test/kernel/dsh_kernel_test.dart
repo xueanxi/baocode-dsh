@@ -9,14 +9,18 @@ import 'package:baocode/kernel/dsh/dsh_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_locate.dart';
 import 'package:baocode/kernel/dsh/dsh_notices.dart';
 import 'package:baocode/kernel/dsh/dsh_patch.dart';
+import 'package:baocode/kernel/dsh/dsh_route.dart';
 import 'package:baocode/kernel/dsh/dsh_sessions.dart';
 import 'package:baocode/kernel/dsh/dsh_transport.dart';
 import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
 import 'package:baocode/kernel/kernel_event.dart';
 import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/kernel_types.dart';
+import 'package:baocode/platform/data_dir.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+
+import 'dsh_route_fixture.dart';
 
 /// The kernel's handshake with dsh, the session it makes on the first
 /// message, what it offers once that session is there, and how it lets the
@@ -33,9 +37,7 @@ void main() {
       final dsh = _FakeDsh();
       // The route's key, given rather than looked for: no test reads the
       // user's own ~/.dsh.
-      final kernel = dsh.kernel(
-        credentials: () async => {DshPatch.credentialRef},
-      );
+      final kernel = dsh.kernel(credentials: (_) async => true);
       final events = _listen(kernel);
 
       expect(kernel.health.status, KernelHealthStatus.idle);
@@ -163,13 +165,13 @@ void main() {
     'no key for the route: said once, and dsh is started all the same',
     () async {
       final dsh = _FakeDsh();
-      final kernel = dsh.kernel(credentials: () async => <String>{});
+      final kernel = dsh.kernel(credentials: (_) async => false);
       final events = _listen(kernel);
       kernel.prepare();
       await settled(() => kernel.health.status == KernelHealthStatus.ready);
 
       final notice =
-          _item(events, 'notice:credential:${DshPatch.credentialRef}').item
+          _item(events, 'notice:credential:${testDshRoute.apiKeyEnv}').item
               as NoticeItem;
       expect(notice.kind, NoticeKind.error);
       // The key's absence is what the turns fail on, not what the start does.
@@ -428,6 +430,66 @@ void main() {
         'value': 'high',
       },
     );
+  });
+
+  test('the route file this machine keeps is what the patch runs on', () async {
+    final before = DataDirectory.current;
+    final data = await Directory.systemTemp.createTemp('baocode-route-data');
+    addTearDown(() async {
+      DataDirectory.current = before;
+      await data.delete(recursive: true);
+    });
+    DataDirectory.current = DataDirectory(data.path);
+    final directory = p.join(data.path, 'dsh');
+    await Directory(directory).create(recursive: true);
+    await File(p.join(directory, DshRoute.fileName)).writeAsString('''
+provider=local
+base_url=http://127.0.0.1:8080/v1
+api_key_env=LOCAL_API_KEY
+model=local-model
+context_window=32000
+''');
+
+    final dsh = _FakeDsh();
+    final kernel = dsh.kernel(route: null);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+
+    final patch = File(dsh.launches.single.patchFile).readAsStringSync();
+    expect(patch, contains('provider: local'));
+    expect(patch, contains('baseURL: http://127.0.0.1:8080/v1'));
+    expect(patch, contains('apiKeyEnv: LOCAL_API_KEY'));
+    expect(patch, contains('model: local-model'));
+    expect(kernel.contextWindow, 32000);
+  });
+
+  test('a route file that cannot be used fails the start', () async {
+    final before = DataDirectory.current;
+    final data = await Directory.systemTemp.createTemp('baocode-route-data');
+    addTearDown(() async {
+      DataDirectory.current = before;
+      await data.delete(recursive: true);
+    });
+    DataDirectory.current = DataDirectory(data.path);
+    final directory = p.join(data.path, 'dsh');
+    await Directory(directory).create(recursive: true);
+    await File(p.join(directory, DshRoute.fileName)).writeAsString('''
+provider=local
+base_url=http://127.0.0.1:8080/v1
+api_key_env=LOCAL_API_KEY
+model=local-model
+nonsense=1
+''');
+
+    final dsh = _FakeDsh();
+    final kernel = dsh.kernel(route: null);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.failed);
+
+    // Named rather than skipped: a route written down on purpose is not one
+    // to fall back from in silence.
+    expect(kernel.health.detail, contains('line 5'));
+    expect(dsh.launches, isEmpty);
   });
 
   test('the context window: the patch\'s until dsh reports its own', () async {
@@ -1106,7 +1168,8 @@ class _FakeDsh {
     Map<String, String> settings = const {},
     Map<String, String> environment = const {'PATH': '/usr/bin'},
     KernelWorkspace? workspace,
-    DshCredentialRefs? credentials,
+    DshCredentialCheck? credentials,
+    DshRoute? route = testDshRoute,
   }) => DshKernel(
     KernelRegistry.dsh,
     KernelContext(
@@ -1118,7 +1181,8 @@ class _FakeDsh {
     locate: locate,
     environment: () async => environment,
     sessions: MemoryDshSessionStore(),
-    credentials: credentials ?? () async => {DshPatch.credentialRef},
+    route: route,
+    credentials: credentials ?? (_) async => true,
   );
 }
 

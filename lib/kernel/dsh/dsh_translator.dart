@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import '../../chat/chat_models.dart';
 import '../kernel_event.dart';
 import '../kernel_types.dart';
-import 'dsh_patch.dart';
+import 'dsh_route.dart';
 
 /// A JSON-RPC error dsh answered a request with.
 class DshRpcError implements Exception {
@@ -80,9 +80,9 @@ class DshTranslator {
   /// resumed one, a pick of the user's, or a change of dsh's own.
   final void Function(List<Map<String, Object?>> options) options;
 
-  /// How much of the model the context holds, as last reported; the
-  /// patch's while dsh has said nothing (one number, in `dsh_patch.dart`).
-  int contextWindow = DshPatch.contextWindow;
+  /// How much of the model the context holds, as last reported; the route's
+  /// while dsh has said nothing (`dsh_route.dart`).
+  int contextWindow = DshRoute.defaultContextWindow;
 
   String? _turn;
   DateTime? _startedAt;

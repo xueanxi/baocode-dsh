@@ -24,6 +24,11 @@ migrate_working_dir/
 # Working notes, written while a branch is being prepared.
 .pr-body.md
 
+# A machine's own DSH route (docs/dsh-kernel.md §7): its provider, model and
+# endpoint. The app reads it from its data folder; this guards a copy kept in
+# the checkout for BAOCODE_DSH_ENV.
+/dsh.env
+
 # The .vscode folder contains launch configuration and tasks you configure in
 # VS Code which you may wish to be included in version control, so this line
 # is commented out by default.

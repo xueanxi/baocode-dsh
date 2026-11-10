@@ -17,6 +17,7 @@ import 'dsh_bash.dart';
 import 'dsh_locate.dart';
 import 'dsh_notices.dart';
 import 'dsh_patch.dart';
+import 'dsh_route.dart';
 import 'dsh_question_server.dart';
 import 'dsh_questions.dart';
 import 'dsh_sessions.dart';
@@ -70,7 +71,9 @@ class DshKernel
     DshSessionStore? sessions,
     DshQuestionServerStarter? questionServer,
     this._credentials,
+    DshRoute? route,
   }) : _environment = environment ?? ClaudeEnvironment.of,
+       _givenRoute = route,
        _sessions = sessions ?? DshSessionStore.file(),
        _questionServerStart = questionServer ?? startDshQuestionServer,
        _sessionId = _context.resume?.id,
@@ -79,7 +82,7 @@ class DshKernel
       emit: emit,
       nextSeq: () => nextSeq,
       options: _applyOptions,
-    );
+    )..contextWindow = route?.contextWindow ?? DshRoute.defaultContextWindow;
     _approvals = DshApprovals(
       emit: emit,
       nextSeq: () => nextSeq,
@@ -108,10 +111,16 @@ class DshKernel
   /// test gives one that cannot bind, so that no socket opens under it.
   final DshQuestionServerStarter _questionServerStart;
 
-  /// The refs dsh can resolve, where a test gives its own: the preflight
-  /// would otherwise look at the machine the test runs on. Null reads this
-  /// machine's own store, by name only (`dsh_notices.dart`).
-  final DshCredentialRefs? _credentials;
+  /// Whether dsh can resolve a route's ref, where a test gives its own: the
+  /// preflight would otherwise look at the machine the test runs on. Null
+  /// reads this machine's own store, by name only (`dsh_notices.dart`).
+  final DshCredentialCheck? _credentials;
+
+  /// The route a test gave: it starts dsh on that one whatever this machine's
+  /// file says. Null reads the machine's file at each start
+  /// (`dsh_route.dart`), so a file written or removed between two starts is
+  /// what the next one runs on.
+  final DshRoute? _givenRoute;
 
   /// Where the conversations this kernel starts are kept, for the sidebar
   /// and for reading back (see [DshCatalog]).
@@ -488,17 +497,28 @@ class DshKernel
       // both whether there is a Git Bash to turn on and where DSH_HOME is,
       // which the patch checks the plugin against.
       environment = await _environment();
+      // This machine's route, unless a test gave one: no file means dsh runs
+      // on the model its own profile is configured with.
+      final route =
+          _givenRoute ??
+          await DshRoute.load(
+            directory: DataDirectory.current.dshDir,
+            environment: environment,
+          );
+      _translator.contextWindow =
+          route?.contextWindow ?? DshRoute.defaultContextWindow;
       final bridge = await _openAskBridge();
       patchFile = await DshPatch.ensure(
         install: install,
         directory: DataDirectory.current.dshDir,
+        route: route,
         withBash: await findGitBash(environment: environment) != null,
         askBridge: bridge?.plugin,
         dshHome: _dshHomeOf(environment),
       );
       // Said before it starts, so that the first turn's failure is not the
       // first word about it (§5.3).
-      await _checkCredential(environment);
+      if (route != null) await _checkCredential(route.apiKeyEnv, environment);
       transport = await _start(
         DshLaunch(
           cwd: _cwd,
@@ -511,6 +531,10 @@ class DshKernel
           },
         ),
       );
+    } on DshRouteException catch (error) {
+      const message = "DSH's route cannot be used";
+      _fail(message, detail: error.message);
+      throw DshUnavailable(message, detail: error.message);
     } on DshUnavailable catch (error) {
       _fail(error.message, detail: error.detail ?? _stderrTail());
       rethrow;
@@ -600,25 +624,28 @@ class DshKernel
     return named.isEmpty ? null : named;
   }
 
-  /// Says so when dsh's route has no key of its own for the ref it reads
-  /// (F24): every turn would fail over it, one by one, and it is a word in
-  /// the conversation rather than a reason not to start (§5.3).
+  /// Says so when dsh's route has no key of its own for [ref], the one the
+  /// route file names (F24): every turn would fail over it, one by one, and it
+  /// is a word in the conversation rather than a reason not to start (§5.3).
   ///
-  /// The refs are the injected ones where a test gave them, and this machine's
+  /// The check is the injected one where a test gave it, and this machine's
   /// own otherwise — its store's key names, never a value.
-  Future<void> _checkCredential(Map<String, String> environment) async {
-    final Set<String> refs;
+  Future<void> _checkCredential(
+    String ref,
+    Map<String, String> environment,
+  ) async {
+    final bool found;
     try {
-      refs =
+      found =
           await (_credentials ??
-              DshCredentials.refs(environment: environment))();
+              DshCredentials.check(environment: environment))(ref);
     } on Object {
       // A check that cannot be made is not a dsh that cannot start: dsh
       // answers for itself, turn by turn.
       return;
     }
-    if (refs.contains(DshPatch.credentialRef)) return;
-    _notices.credentialMissing(DshPatch.credentialRef);
+    if (found) return;
+    _notices.credentialMissing(ref);
   }
 
   void _fail(String message, {String? detail}) {

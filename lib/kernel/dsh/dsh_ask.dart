@@ -9,6 +9,7 @@
 import 'dart:convert';
 
 import 'dsh_locate.dart';
+import 'dsh_route.dart';
 import 'dsh_ask_stub.dart' if (dart.library.io) 'dsh_ask_io.dart' as platform;
 
 /// How long a question is given: a one-line answer, with the process to
@@ -28,9 +29,9 @@ List<String> dshAskArguments(String patchFile) => [
   '-',
 ];
 
-/// The refs dsh can resolve (see `DshCredentials.refs`): this machine's own,
-/// or a test's, which must not read the user's own store.
-typedef DshAskCredentials = Future<Set<String>> Function();
+/// Whether dsh can resolve a ref (see `DshCredentials.check`): this machine's
+/// own, or a test's, which must not read the user's own store.
+typedef DshAskCredentials = Future<bool> Function(String ref);
 
 /// Asks the dsh on this machine [prompt], with [system] before it (an empty
 /// one leaves it out), and completes with the answer.
@@ -38,13 +39,15 @@ typedef DshAskCredentials = Future<Set<String>> Function();
 /// Completing [cancel] stops it, and throws [DshAskCancelled]; a dsh that
 /// cannot be found or started, or that answers nothing, throws
 /// [DshAskException]. [install] is the dsh to ask (found as the kernel finds
-/// one otherwise); [credentials] the refs it can resolve.
+/// one otherwise); [credentials] whether it can resolve a ref; [route] the
+/// model to ask on, this machine's own file when null (`dsh_route.dart`).
 Future<String> askDsh(
   String system,
   String prompt, {
   Future<void>? cancel,
   DshInstall? install,
   DshAskCredentials? credentials,
+  DshRoute? route,
   Duration timeout = dshAskTimeout,
 }) => platform.askDsh(
   system,
@@ -52,6 +55,7 @@ Future<String> askDsh(
   cancel: cancel,
   install: install,
   credentials: credentials,
+  route: route,
   timeout: timeout,
 );
 

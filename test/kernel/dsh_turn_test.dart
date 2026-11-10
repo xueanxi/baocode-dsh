@@ -4,7 +4,6 @@ import 'package:baocode/chat/chat_models.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_locate.dart';
-import 'package:baocode/kernel/dsh/dsh_patch.dart';
 import 'package:baocode/kernel/dsh/dsh_sessions.dart';
 import 'package:baocode/kernel/dsh/dsh_transport.dart';
 import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
@@ -13,6 +12,8 @@ import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/kernel_types.dart';
 import 'package:baocode/kernel/transcript.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'dsh_route_fixture.dart';
 
 /// One turn as dsh reports it, translated: the order of what the history
 /// shows, the ids the client makes for it, and the ways a turn can end —
@@ -448,10 +449,11 @@ class _Rig {
     ),
     environment: () async => const {'PATH': '/usr/bin'},
     sessions: MemoryDshSessionStore(),
-    // The route's credential, served rather than looked for: nothing here
-    // reads this machine's `~/.dsh`, and no `notice:credential:*` opens the
-    // conversation ahead of the turn.
-    credentials: () async => {DshPatch.credentialRef},
+    // The route and its credential, served rather than looked for: nothing
+    // here reads this machine's `~/.dsh`, and no `notice:credential:*` opens
+    // the conversation ahead of the turn.
+    route: testDshRoute,
+    credentials: (_) async => true,
   )..events.listen(_receive);
 
   final List<KernelEvent> events = [];

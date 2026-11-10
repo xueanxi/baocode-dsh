@@ -12,6 +12,8 @@ import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/kernel_types.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'dsh_route_fixture.dart';
+
 /// One conversation across the tickets that built the DSH kernel: prepare and
 /// its handshake (T2), the first message making the session (T2), a turn with
 /// a tool call and an approval answered (T3), a later turn (T2), a failed turn
@@ -302,7 +304,8 @@ class _FakeDsh {
     environment: () async => const {'PATH': '/usr/bin'},
     sessions: MemoryDshSessionStore(),
     // Named rather than looked for: no test reads the user's own ~/.dsh.
-    credentials: () async => {'STEPCODEV2_API_KEY'},
+    route: testDshRoute,
+    credentials: (_) async => true,
   );
 }
 

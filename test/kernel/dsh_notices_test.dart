@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:baocode/chat/chat_models.dart';
 import 'package:baocode/kernel/dsh/dsh_notices.dart';
-import 'package:baocode/kernel/dsh/dsh_patch.dart';
 import 'package:baocode/kernel/kernel_event.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -23,8 +22,11 @@ void main() {
     /// own, so that the store read goes there and nowhere else.
     Map<String, String> environment() => {'DSH_HOME': home.path};
 
-    Future<Set<String>> refs() =>
-        DshCredentials.refs(environment: environment())();
+    /// The ref a route of this test reads; the store is what can resolve it.
+    const ref = 'STEPCODEV2_API_KEY';
+
+    Future<bool> resolvable(String name) =>
+        DshCredentials.check(environment: environment())(name);
 
     test(
       'a store listing the ref under `refs`: the route has its key',
@@ -33,12 +35,12 @@ void main() {
 version: 1
 refs:
   STEPCODE_API_KEY: sk-one
-  "${DshPatch.credentialRef}": sk-two
+  "$ref": sk-two
 records:
-  ${DshPatch.credentialRef}: 2026-11-09
+  $ref: 2026-11-09
 ''');
 
-        expect(await refs(), {DshPatch.credentialRef});
+        expect(await resolvable(ref), isTrue);
       },
     );
 
@@ -48,11 +50,11 @@ version: 1
 refs:
   OPENROUTER_API_KEY: sk-one
 records:
-  ${DshPatch.credentialRef}: 2026-11-09
+  $ref: 2026-11-09
 ''');
 
       // A name only under `records` is a date, not a key.
-      expect(await refs(), isEmpty);
+      expect(await resolvable(ref), isFalse);
     });
 
     test('a store that cannot be read: no refs, and no failure', () async {
@@ -60,7 +62,7 @@ records:
       // read is not a start that cannot happen (§5.3).
       await Directory(p.join(home.path, DshCredentials.fileName)).create();
 
-      expect(await refs(), isEmpty);
+      expect(await resolvable(ref), isFalse);
     });
   });
 

@@ -7,7 +7,6 @@ import '../codex/codex_kernel.dart';
 import '../codex/mock_codex_transport.dart';
 import '../dsh/dsh_kernel.dart';
 import '../dsh/dsh_locate.dart';
-import '../dsh/dsh_patch.dart';
 import '../dsh/dsh_sessions.dart';
 import '../dsh/mock_dsh_transport.dart';
 
@@ -61,10 +60,10 @@ abstract final class MockKernels {
         // No login shell is asked: a mock process is not one to run
         // anything, and the shell's would be a test's own.
         environment: () async => const {'PATH': '/usr/bin'},
-        // Nor is the machine's own credential store read: the preflight is
-        // told the route's ref is there, so a mock starts with no notice and
-        // nothing of the user's is looked at.
-        credentials: () async => {DshPatch.credentialRef},
+        // Nor is the machine's own credential store read: a mock declares no
+        // route of its own, so the preflight is never asked, and nothing of
+        // the user's is looked at.
+        credentials: (_) async => true,
         // No loopback either: a widget test's fake async owns no socket, and
         // there is no one behind a mock's panel to answer.
         questionServer: (_) async =>

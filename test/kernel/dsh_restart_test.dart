@@ -15,6 +15,8 @@ import 'package:baocode/workspace/preference_store.dart';
 import 'package:baocode/workspace/workspace.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'dsh_route_fixture.dart';
+
 /// A DSH conversation kept between two runs: the session of the first is
 /// listed by the catalog of the second, resumed rather than made anew, and
 /// what was said in it is read back.
@@ -221,7 +223,8 @@ DshKernel _kernel(
   ),
   environment: () async => const {'PATH': '/usr/bin'},
   sessions: sessions,
-  credentials: () async => {'STEPCODEV2_API_KEY'},
+  route: testDshRoute,
+  credentials: (_) async => true,
 );
 
 /// Runs the event loop until [done] holds, giving up after a while: what the

@@ -5,11 +5,12 @@ import 'dart:io';
 import 'package:bao_remote/local.dart' show ClaudeEnvironment;
 import 'package:path/path.dart' as p;
 
-import '../../platform/data_dir.dart' show writeFileAtomically;
+import '../../platform/data_dir.dart' show DataDirectory, writeFileAtomically;
 import 'dsh_ask.dart';
 import 'dsh_locate.dart';
 import 'dsh_notices.dart' show DshCredentials;
 import 'dsh_patch.dart';
+import 'dsh_route.dart';
 import 'dsh_path_setting.dart';
 import 'dsh_transport.dart' show DshLaunch;
 import 'dsh_transport_io.dart' show DshRedact;
@@ -47,9 +48,21 @@ Future<String> askDsh(
   Future<void>? cancel,
   DshInstall? install,
   DshAskCredentials? credentials,
+  DshRoute? route,
   Duration timeout = dshAskTimeout,
 }) async {
   final environment = await ClaudeEnvironment.of();
+  final DshRoute? on;
+  try {
+    on =
+        route ??
+        await DshRoute.load(
+          directory: DataDirectory.current.dshDir,
+          environment: environment,
+        );
+  } on DshRouteException catch (error) {
+    throw DshAskException("DSH's route cannot be used", detail: error.message);
+  }
   final DshInstall? dsh;
   try {
     dsh =
@@ -64,7 +77,9 @@ Future<String> askDsh(
   if (dsh == null) {
     throw const DshAskException(_missing, detail: _where);
   }
-  await _checkCredential(credentials, environment);
+  if (on != null) {
+    await _checkCredential(credentials, environment, on.apiKeyEnv);
+  }
   final run = Directory(
     p.join(Directory.systemTemp.path, 'baocode-dsh-ask-$pid-${_asked++}'),
   );
@@ -76,6 +91,7 @@ Future<String> askDsh(
       DshPatch.askContent(
         version: dsh.version,
         sessionRoot: p.join(run.path, 'sessions'),
+        route: on,
       ),
     );
     final Process process;
@@ -161,28 +177,31 @@ String _tail(String stderr) {
   return kept.join('\n');
 }
 
-/// Says so when dsh's route has no key for the ref it reads (F24): every
-/// question would fail over it, and a word about the key is worth more than
-/// dsh's own refusal to answer.
+/// Says so when dsh's route has no key for [ref], the one its route file
+/// names (F24): every question would fail over it, and a word about the key is
+/// worth more than dsh's own refusal to answer.
 ///
-/// The refs are the given ones where a test gave them, and this machine's own
+/// The check is the given one where a test gave it, and this machine's own
 /// otherwise — its store's key names, never a value. A check that cannot be
 /// made is not dsh that cannot answer: dsh says so itself.
 Future<void> _checkCredential(
   DshAskCredentials? credentials,
   Map<String, String> environment,
+  String ref,
 ) async {
-  final Set<String> refs;
+  final bool found;
   try {
-    refs =
-        await (credentials ?? DshCredentials.refs(environment: environment))();
+    found =
+        await (credentials ?? DshCredentials.check(environment: environment))(
+          ref,
+        );
   } on Object {
     return;
   }
-  if (refs.contains(DshPatch.credentialRef)) return;
-  throw const DshAskException(
-    'dsh has no credential for ${DshPatch.credentialRef}; add it in dsh web '
-    '(Models), or set the environment variable.',
+  if (found) return;
+  throw DshAskException(
+    'dsh has no credential for $ref; add it in dsh web (Models), or set the '
+    'environment variable.',
   );
 }
 

@@ -6,7 +6,6 @@ import 'package:baocode/kernel/agent_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_locate.dart';
 import 'package:baocode/kernel/dsh/dsh_notices.dart';
-import 'package:baocode/kernel/dsh/dsh_patch.dart';
 import 'package:baocode/kernel/dsh/dsh_sessions.dart';
 import 'package:baocode/kernel/dsh/dsh_transport.dart';
 import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
@@ -14,6 +13,8 @@ import 'package:baocode/kernel/kernel_event.dart';
 import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/kernel_types.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'dsh_route_fixture.dart';
 
 /// What dsh asks the user for, and what the conversation says of its own: an
 /// approval held as a question and answered in dsh's own words, the dsh older
@@ -306,7 +307,7 @@ void main() {
       final rig = _Rig();
       // dsh on this machine is not the dsh of the test: the refs the route can
       // resolve are given, so that no preflight reads the real store.
-      final kernel = rig.kernel(credentials: () async => <String>{});
+      final kernel = rig.kernel(credentials: (_) async => false);
       final events = _listen(kernel);
       kernel.prepare();
       await settled(() => kernel.health.status == KernelHealthStatus.ready);
@@ -598,14 +599,15 @@ class _Rig {
   /// A kernel over this fake dsh. The refs its route can resolve are given
   /// here rather than read from the machine's `~/.dsh`: no test reads the
   /// user's own store.
-  DshKernel kernel({DshCredentialRefs? credentials}) => DshKernel(
+  DshKernel kernel({DshCredentialCheck? credentials}) => DshKernel(
     KernelRegistry.dsh,
     const KernelContext(cwd: '/project'),
     start: start,
     locate: locate,
     environment: () async => const {'PATH': '/usr/bin'},
     sessions: MemoryDshSessionStore(),
-    credentials: credentials ?? () async => {DshPatch.credentialRef},
+    route: testDshRoute,
+    credentials: credentials ?? (_) async => true,
   );
 }
 

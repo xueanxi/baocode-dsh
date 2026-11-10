@@ -1,5 +1,6 @@
 import 'dsh_locate.dart';
 import 'dsh_ask.dart';
+import 'dsh_route.dart';
 
 /// No dsh runs here (the browser): a question has no one to answer it.
 Future<String> askDsh(
@@ -8,6 +9,7 @@ Future<String> askDsh(
   Future<void>? cancel,
   DshInstall? install,
   DshAskCredentials? credentials,
+  DshRoute? route,
   Duration timeout = dshAskTimeout,
 }) async => throw const DshAskException(
   'DSH runs as a local process, which this app cannot start.',
