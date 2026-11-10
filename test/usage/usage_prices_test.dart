@@ -67,6 +67,33 @@ void main() {
     expect(UsagePrices.money(0.0042, 'CNY'), '¥0.0042');
   });
 
+  test(
+    'a model no settings price names falls back to the DeepSeek estimate',
+    () {
+      final prices = UsagePrices();
+      final call = _call(
+        now,
+        provider: 'stepcodev2',
+        model: 'deepseek-v4.1-flash',
+        input: 1000000,
+        cacheRead: 1000000,
+        output: 1000000,
+      );
+      expect(prices.priceOf(call)?.input, 0.28);
+      expect(prices.priceOf(call)?.cacheRead, 0.028);
+      expect(prices.priceOf(call)?.source, DeepSeekPrices.source);
+      expect(
+        prices.costOf([call]).byCurrency['USD'],
+        closeTo(0.28 + 0.028 + 0.42, 1e-9),
+      );
+      // A price of the user's own still wins.
+      final own = UsagePrices({
+        'stepcodev2/deepseek-v4.1-flash': const ModelPrice(input: 1, output: 1),
+      });
+      expect(own.priceOf(call)?.input, 1);
+    },
+  );
+
   test('a summary counts the costs by currency, the unpriced apart', () {
     UsagePrices.current = UsagePrices({
       'gw/glm-5': const ModelPrice(input: 4, output: 16, currency: 'CNY'),

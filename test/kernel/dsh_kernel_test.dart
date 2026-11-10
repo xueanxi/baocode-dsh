@@ -12,11 +12,15 @@ import 'package:baocode/kernel/dsh/dsh_patch.dart';
 import 'package:baocode/kernel/dsh/dsh_route.dart';
 import 'package:baocode/kernel/dsh/dsh_sessions.dart';
 import 'package:baocode/kernel/dsh/dsh_transport.dart';
+import 'package:baocode/kernel/dsh/dsh_usage_bridge.dart';
+import 'package:baocode/kernel/dsh/dsh_usage_server.dart';
 import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
 import 'package:baocode/kernel/kernel_event.dart';
 import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/kernel_types.dart';
 import 'package:baocode/platform/data_dir.dart';
+import 'package:baocode/usage/usage_ledger.dart';
+import 'package:baocode/usage/usage_record.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -70,10 +74,18 @@ void main() {
       expect(askUrl.scheme, 'http');
       expect(askUrl.host, '127.0.0.1');
       expect(launch.environment![DshAskBridge.tokenVariable], isNotEmpty);
+      final usageUrl = Uri.parse(
+        launch.environment![DshUsageBridge.urlVariable]!,
+      );
+      expect(usageUrl.scheme, 'http');
+      expect(usageUrl.host, '127.0.0.1');
+      expect(launch.environment![DshUsageBridge.tokenVariable], isNotEmpty);
       final patch = File(launch.patchFile).readAsStringSync();
       expect(patch, contains('- id: baocode-ask'));
       expect(patch, contains("name: '@deepseek-ai/dsh-tool-ask-user'"));
       expect(patch, contains(DshAskBridge.fileName));
+      expect(patch, contains('- id: baocode-usage-bridge'));
+      expect(patch, contains(DshUsageBridge.fileName));
     },
   );
 
@@ -1002,12 +1014,167 @@ nonsense=1
     await settled(() => kernel.health.status == KernelHealthStatus.ready);
 
     final launch = dsh.launches.single;
-    expect(launch.environment, {'PATH': '/usr/bin'});
-    expect(
-      File(launch.patchFile).readAsStringSync(),
-      isNot(contains('baocode-ask')),
-    );
+    // No one to answer, so no question endpoint: but calls are still calls,
+    // and the token accountant is there.
+    expect(launch.environment, isNot(contains(DshAskBridge.urlVariable)));
+    expect(launch.environment, contains(DshUsageBridge.urlVariable));
+    expect(launch.environment, contains(DshUsageBridge.tokenVariable));
+    final patch = File(launch.patchFile).readAsStringSync();
+    expect(patch, isNot(contains('dsh-tool-ask-user')));
+    expect(patch, isNot(contains('baocode-ask-bridge')));
+    expect(patch, contains('- id: baocode-usage-bridge'));
   });
+
+  test('a call dsh reports is kept with the provider tokens', () async {
+    final ledger = UsageLedger(MemoryUsageStorage());
+    final previous = UsageLedger.current;
+    UsageLedger.current = ledger;
+    addTearDown(() => UsageLedger.current = previous);
+
+    final dsh = _FakeDsh();
+    final kernel = dsh.kernel(realUsage: true);
+    addTearDown(kernel.dispose);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+    kernel.send(const KernelTurn(id: 'turn-1', text: 'Hello'));
+    await settled(() => kernel.sessionId == 'session-mock');
+
+    final launch = dsh.launches.single;
+    final environment = launch.environment!;
+    expect(
+      await _postUsage(environment, {
+        'session': 'session-mock',
+        'turn': 1,
+        'step': 1,
+        'time': 1794290000000,
+        'started': 1794289999000,
+        'provider': 'stepcodev2',
+        'model': 'deepseek-v4.1-flash',
+        'responseModel': 'deepseek-v4.1-flash-zhiyue',
+        'stopReason': 'toolUse',
+        'usage': {
+          'input': 1234,
+          'output': 567,
+          'cacheRead': 890,
+          'cacheWrite': 12,
+          'reasoning': 34,
+          'total': 2703,
+        },
+      }),
+      204,
+    );
+    await settled(() => ledger.hasCalls('session-mock'));
+
+    final call = (await ledger.ofSession('session-mock')).single;
+    // The provider's numbers, not an estimate: input is the uncached part,
+    // the cache kept beside it, and the output whole.
+    expect(call.input, 1234);
+    expect(call.output, 567);
+    expect(call.cacheRead, 890);
+    expect(call.cacheWrite, 12);
+    expect(call.reasoning, 34);
+    expect(call.total, 2703);
+    expect(call.provider, 'stepcodev2');
+    expect(call.model, 'deepseek-v4.1-flash');
+    expect(call.upstreamModel, 'deepseek-v4.1-flash-zhiyue');
+    expect(call.status, 200);
+    expect(call.at.millisecondsSinceEpoch, 1794290000000);
+    expect(call.duration, const Duration(seconds: 1));
+    expect(call.session, 'session-mock');
+    expect(call.requestClass, UsageClass.main);
+  });
+
+  test(
+    'a subagent call is kept on the conversation, attributed to it',
+    () async {
+      final ledger = UsageLedger(MemoryUsageStorage());
+      final previous = UsageLedger.current;
+      UsageLedger.current = ledger;
+      addTearDown(() => UsageLedger.current = previous);
+
+      final dsh = _FakeDsh();
+      final kernel = dsh.kernel(realUsage: true);
+      addTearDown(kernel.dispose);
+      kernel.prepare();
+      await settled(() => kernel.health.status == KernelHealthStatus.ready);
+      kernel.send(const KernelTurn(id: 'turn-1', text: 'Hello'));
+      await settled(() => kernel.sessionId == 'session-mock');
+
+      expect(
+        await _postUsage(dsh.launches.single.environment!, {
+          'session': 'session-child',
+          'parent': 'session-mock',
+          'turn': 1,
+          'step': 1,
+          'time': 1794290000000,
+          'usage': {'input': 100, 'output': 20},
+        }),
+        204,
+      );
+      await settled(() => ledger.hasCalls('session-mock'));
+
+      final call = (await ledger.ofSession('session-mock')).single;
+      expect(call.requestClass, UsageClass.subagent);
+      expect(call.agentId, 'session-child');
+      expect(call.total, 120);
+    },
+  );
+
+  test('a report without tokens is not a call', () async {
+    final ledger = UsageLedger(MemoryUsageStorage());
+    final previous = UsageLedger.current;
+    UsageLedger.current = ledger;
+    addTearDown(() => UsageLedger.current = previous);
+
+    final dsh = _FakeDsh();
+    final kernel = dsh.kernel(realUsage: true);
+    addTearDown(kernel.dispose);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+    kernel.send(const KernelTurn(id: 'turn-1', text: 'Hello'));
+    await settled(() => kernel.sessionId == 'session-mock');
+
+    expect(
+      await _postUsage(dsh.launches.single.environment!, {
+        'session': 'session-mock',
+        'time': 1794290000000,
+      }),
+      204,
+    );
+    expect(
+      await _postUsage(dsh.launches.single.environment!, {
+        'session': 'session-mock',
+        'time': 1794290000000,
+        'usage': {'input': 0, 'output': 0},
+      }),
+      204,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(await ledger.ofSession('session-mock'), isEmpty);
+  });
+}
+
+/// Posts [body] to the usage endpoint, as the bridge does; its status.
+Future<int> _postUsage(
+  Map<String, String> environment,
+  Map<String, Object?> body,
+) async {
+  final url = Uri.parse(environment[DshUsageBridge.urlVariable]!);
+  final client = HttpClient();
+  try {
+    final request = await client.postUrl(url.resolve('/usage'));
+    request.headers.set(
+      HttpHeaders.authorizationHeader,
+      'Bearer ${environment[DshUsageBridge.tokenVariable]}',
+    );
+    request.headers.contentType = ContentType.json;
+    request.write(jsonEncode(body));
+    final response = await request.close();
+    await response.drain<void>();
+    return response.statusCode;
+  } finally {
+    client.close(force: true);
+  }
 }
 
 /// The endpoint the kernel's bridge asks on.
@@ -1170,6 +1337,7 @@ class _FakeDsh {
     KernelWorkspace? workspace,
     DshCredentialCheck? credentials,
     DshRoute? route = testDshRoute,
+    bool realUsage = false,
   }) => DshKernel(
     KernelRegistry.dsh,
     KernelContext(
@@ -1183,7 +1351,29 @@ class _FakeDsh {
     sessions: MemoryDshSessionStore(),
     route: route,
     credentials: credentials ?? (_) async => true,
+    // A socket per test is not the kernel's: the usage test takes the real
+    // endpoint, and the others a stand-in that only names one.
+    usageServer: realUsage ? null : _fakeUsageServer,
   );
+}
+
+/// A usage endpoint that is never posted to: what a kernel test that is not
+/// about usage gets, so that no loopback socket outlives it.
+Future<DshUsageServer> _fakeUsageServer(DshUsageHandler onUsage) async =>
+    _FakeUsageServer();
+
+class _FakeUsageServer implements DshUsageServer {
+  @override
+  Future<void> start() async {}
+
+  @override
+  Uri get url => Uri.parse('http://127.0.0.1:1');
+
+  @override
+  String get token => 'usage-token';
+
+  @override
+  Future<void> close() async {}
 }
 
 /// Everything [kernel] reports, as it reports it.

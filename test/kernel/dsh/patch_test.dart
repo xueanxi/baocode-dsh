@@ -145,6 +145,28 @@ void main() {
     },
   );
 
+  test('the token accountant is inserted even where no one answers', () {
+    const bridge =
+        'file:///C:/Users/me/AppData/Roaming/BaoCode/dsh/usage_bridge.mjs';
+    final usage = DshPatch.content(version: '0.2.0-rc.2', usageBridge: bridge);
+    expect(usage, contains('- insert:'));
+    expect(usage, contains('    - id: baocode-usage-bridge'));
+    expect(usage, contains("      name: '$bridge'"));
+    // No answerer: a bot's conversation is still a conversation.
+    expect(usage, isNot(contains('baocode-ask')));
+    expect(usage, isNot(contains('dsh-tool-ask-user')));
+
+    final both = DshPatch.content(
+      version: '0.2.0-rc.2',
+      askBridge: 'file:///tmp/ask_bridge.mjs',
+      usageBridge: bridge,
+    );
+    expect(
+      both.indexOf('baocode-ask-bridge'),
+      lessThan(both.indexOf('baocode-usage-bridge')),
+    );
+  });
+
   test(
     'the one question runs headless on the same route, in its own folder',
     () {

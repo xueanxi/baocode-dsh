@@ -124,6 +124,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 - `AcceptsImages.supportsImages` 取 `initialize.promptCapabilities.image`（本设计的补丁下为 true）；为 false 时，发送前剥掉图片并发一条 warning 提示。
 - `SelectsPermission` 是内核自己的 `_Choice` 实现（不用 `LocalChoice`，因为 `LocalChoice.select` 会立刻改 `selected`）：首条消息之前三档可选，之后 `options` 只保留当前项（选择器自然只剩一项）。
 - `QueuesMessages` 是**适配器自己的队列**，不是 dsh 的能力：dsh 一次只收一个 prompt（F12），所以工作中发来的消息由内核先收下，当前轮结束后再依次发出（§5.17）。
+- `ReportsUsage` 是账号额度，不是每笔调用的令牌：后者由补丁挂的 `baocode-usage-bridge` 从 dsh 的 `assistant/message` 事件取 `usage`，经本机端点记入用量账本（§5.18）。
 
 ### 5.3 启动、定位与 profile
 
@@ -255,7 +256,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - **标题**：DSH 不声明 `RenamesSession`，自动起标题已经因此不触发；手动「总结标题」也要按 `canRename` 关掉，避免把 DSH 对话文本发给 Claude Haiku。
 - **图片**：`AcceptsImages.supportsImages`；真实能力为 false 时剥掉图片并提示（提示在同一轮内）。握手未完成时它是 false（「还不知道」），带图的一轮等握手再决定，不抢先剥掉。
 - **线程记住的内核在本项目不可用**（例如把 DSH 对话挪进多文件夹项目）：会话以当前第一个可用内核打开（`ChatSession._availableKernel`）；一个都不可用时才保留原内核。不报错。
-- **用量**：不声明 `ReportsUsage`，设置→用量里没有 DSH 的账（文档写明）。
+- **用量**：不声明 `ReportsUsage`（那是账号额度）；每笔调用的令牌由 `baocode-usage-bridge` 记入设置→用量（§5.18）。
 - **自定义页**：Customize 是全局页、与内核无关，**不改**；文档说明它只作用于 Claude Code。
 - **提示落点**：不新增空态/头部 UI；「历史在 dsh web」「只用单目录项目」写进设置项说明与 `docs/dsh-kernel.md`。
 - **`notes`**：`KernelTurn.notes` 不发送（dsh 没有对应通道）；`mentions` 已包含在文本里。文档写明。
@@ -334,6 +335,18 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - **撤回 / 立即发送 / 移动**：`cancelQueued` 只从本地队列删除并发 `ItemRemoved`；`moveQueued` 重排并发 `QueueReordered`；`sendQueuedNow` 把目标移到队首，再 `session/cancel` 当前轮（prompt 以 `cancelled` 收尾），当前轮结束后目标先发。当前轮还没到 dsh（会话正在建）时，它在本地结束，目标等同一个 `session/new` 结果，不会建出两个会话。
 - **release**：只要队列非空，进程不释放；全部发完后才按 `_releaseWanted` 释放。
 
+### 5.18 用量账本（token 精确，金额估算）
+
+目标：DSH 对话在设置→用量里也有账，且 **tokens 与供应商报的一致**；金额可以按价格估算（用户故事 36）。
+
+- **不读会话文件**：不解析 `~/.dsh/sessions/**/session.v4.jsonl.zstd`（内部格式，升级会变）。dsh 的 ACP `usage_update` 只有上下文占用（`used/size`），也不是一次调用花掉的令牌。
+- **接法**：补丁 `insert` `baocode-usage-bridge`（BaoCode 写的 `usage_bridge.mjs`，`file://` 绝对 URL）。插件监听 `ctx.on('session/event')` 的 `assistant/message` 事件（每次模型调用提交一次），把 `event.data.usage` 的 `inputTokens` / `outputTokens` / `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` 原样 POST 到本机端点 `/usage`；`message.source.provider/model` 与 `replayState.response.responseModel/stopReason` 一并带上。`step/start` → `assistant/message` 的间隔作为这次调用的时长。
+- **端点**：`DshUsageServer` 是独立于问题端点的 loopback HTTP server，只认 `Authorization: Bearer <本次对话的随机 token>`；token 与 URL 走 dsh 环境变量 `BAOCODE_USAGE_URL` / `BAOCODE_USAGE_TOKEN`，不进补丁。**`approvesAll` 的 bot 会话也挂**：没有用户可答问题，不代表没有调用。
+- **记账**：`DshUsageMeter` 把报告变成 `UsageCall`：`input` 是不含缓存的输入，`cacheRead`/`cacheWrite` 单列，`output` 是全部输出，`reasoning` 是输出的子集；`total = input + cacheRead + cacheWrite + output`。报告里没有任何 token 就丢弃，不猜。会话 id 用主对话的 dsh session；子代理会话的调用也记在主对话上，`requestClass = subagent`，`agentId` 是那个子会话。
+- **金额**：`UsagePrices` 先看用户为这条路由设的价格；没有时，若 model 在内置估算表里（`DeepSeekPrices`，目前是 `deepseek-v4.1-flash`：输入 $0.28/M、输出 $0.42/M、缓存读 $0.028/M、缓存写 $0.28/M），就用它并在价格卡上标为内置估算，否则仍是未定价；用户设了价格即覆盖。tokens 不做任何估算。
+- **重复与历史**：dsh 的 `session/event` 不重放 seed 事件，resume 不会把旧调用再记一遍；每条 `assistant/message` 只提交一次，插件也只报一次。只从装了 usage 桥的进程开始记：修复前的 DSH 调用**不回填**。
+- **测试**：`dsh_usage_server_test.dart`（插件文件、token、报告解码）、`dsh_kernel_test.dart`（精确 tokens、时长、子代理归属、无 token 不记）、`dsh/patch_test.dart`（usage-only insert）。
+
 ## 6. Testing Decisions
 
 缝的形状（评审修正后）：**以构造函数注入传输工厂为主缝**，其余都是既有测试惯例，不新增抽象：
@@ -355,6 +368,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - `dsh_turn_test.dart`：TurnStarted/用户条目/TurnEnded 顺序与 id、整条文本、思考、工具卡成功/失败、usage、-32603 也发 TurnEnded、cancel；排队（轮次中发送→当前轮后依次发、撤回、重排、立即发送、会话创建中立即发送只建一个会话）
 - `dsh_approval_test.dart`：请求挂起、allow-once/reject-once/cancelled 线形、工具名与理由关联与缺失回退、迟到应答忽略
 - `dsh_question_server_test.dart`：桥插件文件写入/不重写、`file://` URL、端点 token 校验、未知问题 404
+- `dsh_usage_server_test.dart`：usage 插件文件写入/不重写、`file://` URL、端点 token 校验、报告解码；`dsh_kernel_test.dart`（追加）：精确 tokens 记账（含缓存与 reasoning）、时长、子代理归属、无 token 不记；`dsh/patch_test.dart`（追加）：usage-only insert
 - `dsh_kernel_test.dart`（追加）：问题 → `QuestionRequest`、面板回答的 `selected`/`custom`、跳过、release 时 `cancelled`、无人在场不插桥
 - `e2e_dsh_real_test.dart`：`-t dsh-e2e`，真实 dsh 调 `ask_user_question`，自动答 Apple，断言工具结果与回复（不进 CI）
 - `dsh_restart_test.dart`：重启后 resume 而非 new、历史与标题的读写、`message:<n>` 续号、`DshCatalog` 列项、文件账本与删除
@@ -405,7 +419,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 6. 审批只在 shell 越界时出现；文件写入不问。
 7. 读不作围栏：agent 可以读 `~/.dsh`（含凭据文件）并把内容发出去。
 8. 跨内核的“上次选择”按 kind 全局保存，切内核后可能要重选档位/模型（DSH 会丢弃不认识的 id）。
-9. dsh 的用量不进 BaoCode 的用量账本。
+9. dsh 的 tokens 进 BaoCode 的用量账本（供应商报的精确值）；金额是估算：内置 DeepSeek 价覆盖 `deepseek-v4.1-flash`，其他 model 未设价时仍显示未定价，可在设置→用量里为这条路由改价。
 10. 视图切换会结束进程再 resume，回来时要重新等握手（约 6 秒）。
 11. 应用自己的提问（提交消息）每次起一次 `headless`，约 6 秒；只在那一个内核是 DSH 的项目里如此。
 12. `/` 菜单只读 dsh 的默认 skill 根：不读 `customSkillDirs`，对话开着时不热更新，下次 `prepare()` 才重读。

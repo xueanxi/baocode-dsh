@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../chat/chat_models.dart';
 import '../../platform/data_dir.dart';
+import '../../usage/usage_ledger.dart';
 import '../agent_kernel.dart';
 import '../kernel_event.dart';
 import '../kernel_types.dart';
@@ -24,6 +25,9 @@ import 'dsh_sessions.dart';
 import 'dsh_skills.dart';
 import 'dsh_transport.dart';
 import 'dsh_translator.dart';
+import 'dsh_usage_bridge.dart';
+import 'dsh_usage_meter.dart';
+import 'dsh_usage_server.dart';
 
 /// Starts dsh for one session, e.g. [startDsh].
 typedef DshStarter = Future<DshTransport> Function(DshLaunch launch);
@@ -33,7 +37,7 @@ typedef DshLocator = Future<DshInstall?> Function();
 
 /// The answerer dsh is started with: its plugin's `file://` URL (in the
 /// patch), and what the plugin is told of the endpoint (`dsh_ask_bridge.dart`).
-typedef _AskBridge = ({String plugin, Map<String, String> environment});
+typedef _Bridge = ({String plugin, Map<String, String> environment});
 
 /// A value an option dsh offers, with the heading it is listed under.
 typedef _Offer = ({
@@ -46,9 +50,9 @@ typedef _Offer = ({
 ///
 /// `prepare` finds dsh, writes the profile patch it runs with and shakes
 /// hands, and only the first message creates a session: an empty one would
-/// otherwise be left in `~/.dsh` for every conversation opened. What it does
-/// not do, it does not declare: no usage bookkeeping (see
-/// `docs/spec/dsh-kernel.md` §5.2). The conversations it starts are kept in
+/// otherwise be left in `~/.dsh` for every conversation opened. Its calls'
+/// tokens are kept by a bridge of the app's own (`dsh_usage_bridge.dart`),
+/// as the provider reported them. The conversations it starts are kept in
 /// [DshSessionStore], as dsh names no titles and replays no history (F17,
 /// F15).
 class DshKernel
@@ -70,12 +74,14 @@ class DshKernel
     Future<Map<String, String>> Function()? environment,
     DshSessionStore? sessions,
     DshQuestionServerStarter? questionServer,
+    DshUsageServerStarter? usageServer,
     this._credentials,
     DshRoute? route,
   }) : _environment = environment ?? ClaudeEnvironment.of,
        _givenRoute = route,
        _sessions = sessions ?? DshSessionStore.file(),
        _questionServerStart = questionServer ?? startDshQuestionServer,
+       _usageServerStart = usageServer ?? startDshUsageServer,
        _sessionId = _context.resume?.id,
        _title = _context.resume?.title ?? '' {
     _translator = DshTranslator(
@@ -90,6 +96,10 @@ class DshKernel
     );
     _notices = DshNotices(emit: emit, nextSeq: () => nextSeq);
     _questions = DshQuestions(emit: emit, nextSeq: () => nextSeq);
+    _usageMeter = DshUsageMeter(
+      record: (call) => UsageLedger.current.record(call),
+      session: () => _sessionId,
+    );
     final settings = _context.settings;
     _permission = _tierOf(settings[KernelChoiceKind.permission.name]);
     _wantedModel = settings[KernelChoiceKind.model.name];
@@ -110,6 +120,10 @@ class DshKernel
   /// Where the bridge asks its questions (`dsh_question_server.dart`); a
   /// test gives one that cannot bind, so that no socket opens under it.
   final DshQuestionServerStarter _questionServerStart;
+
+  /// Where dsh's usage reports are taken (`dsh_usage_server.dart`); a test
+  /// gives one that cannot bind, so that no socket opens under it.
+  final DshUsageServerStarter _usageServerStart;
 
   /// Whether dsh can resolve a route's ref, where a test gives its own: the
   /// preflight would otherwise look at the machine the test runs on. Null
@@ -151,6 +165,11 @@ class DshKernel
   /// Where the bridge plugin asks, once a conversation has needed it: one
   /// endpoint per conversation, kept across dsh restarts.
   DshQuestionServer? _questionServer;
+
+  /// Where dsh's token accounting is posted, and what turns a report into a
+  /// call of the conversation's.
+  DshUsageServer? _usageServer;
+  late final DshUsageMeter _usageMeter;
 
   /// The three tiers dsh runs under (F22).
   static const _tiers = ['read-only', 'workspace-write', 'danger-full-access'];
@@ -442,6 +461,8 @@ class DshKernel
     _questions.cancelOpen();
     final questions = _questionServer;
     if (questions != null) unawaited(questions.close());
+    final usage = _usageServer;
+    if (usage != null) unawaited(usage.close());
     if (_transport case final transport?) {
       // Long enough for dsh to flush and hand back what it was granted.
       _stopped = transport.exited.timeout(
@@ -508,14 +529,19 @@ class DshKernel
       _translator.contextWindow =
           route?.contextWindow ?? DshRoute.defaultContextWindow;
       final bridge = await _openAskBridge();
+      final usage = await _openUsageBridge();
       patchFile = await DshPatch.ensure(
         install: install,
         directory: DataDirectory.current.dshDir,
         route: route,
         withBash: await findGitBash(environment: environment) != null,
         askBridge: bridge?.plugin,
+        usageBridge: usage?.plugin,
         dshHome: _dshHomeOf(environment),
       );
+      final launched = {...environment};
+      if (bridge != null) launched.addAll(bridge.environment);
+      if (usage != null) launched.addAll(usage.environment);
       // Said before it starts, so that the first turn's failure is not the
       // first word about it (§5.3).
       if (route != null) await _checkCredential(route.apiKeyEnv, environment);
@@ -525,10 +551,7 @@ class DshKernel
           install: install,
           patchFile: patchFile,
           permissionMode: _permission,
-          environment: switch (bridge) {
-            final bridge? => {...environment, ...bridge.environment},
-            null => environment,
-          },
+          environment: launched,
         ),
       );
     } on DshRouteException catch (error) {
@@ -581,7 +604,7 @@ class DshKernel
   ///
   /// Started before the process, because both the patch (the plugin) and its
   /// environment (where to ask) name what it made.
-  Future<_AskBridge?> _openAskBridge() async {
+  Future<_Bridge?> _openAskBridge() async {
     if (_context.workspace?.call()?.approvesAll ?? false) return null;
     try {
       var server = _questionServer;
@@ -605,6 +628,39 @@ class DshKernel
       // No endpoint, no tool: the agent asks in words, as Claude Code's does
       // where no one is there to answer.
       debugPrint('DSH questions: $error');
+      return null;
+    }
+  }
+
+  /// The token accounting dsh is started with: the plugin that posts each
+  /// call's provider tokens, and where it posts them. Unlike the answerer
+  /// this is kept even where no one is at the computer: a bot's calls are
+  /// calls too.
+  ///
+  /// Started before the process, because both the patch (the plugin) and its
+  /// environment (where to post) name what it made. Null when there is no
+  /// endpoint, or no plugin could be written: the conversation runs as before.
+  Future<_Bridge?> _openUsageBridge() async {
+    if (_disposed) return null;
+    try {
+      var server = _usageServer;
+      if (server == null) {
+        server = await _usageServerStart(_usageMeter.receive);
+        _usageServer = server;
+      }
+      await server.start();
+      return (
+        plugin: await DshUsageBridge.ensure(DataDirectory.current.dshDir),
+        environment: {
+          DshUsageBridge.urlVariable: server.url.toString(),
+          DshUsageBridge.tokenVariable: server.token,
+        },
+      );
+    } on UnsupportedError {
+      // Nowhere to listen (the web): usage is not reported.
+      return null;
+    } on Object catch (error) {
+      debugPrint('DSH usage: $error');
       return null;
     }
   }

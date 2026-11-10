@@ -51,11 +51,16 @@ abstract final class DshPatch {
   /// mounts is what serves it. [askBridge] is the `file://` URL of the
   /// answerer written by `dsh_ask_bridge.dart`: with one, dsh's
   /// `ask_user_question` is mounted and the app's bridge answers it.
+  /// [usageBridge] is the `file://` URL of the token accountant written by
+  /// `dsh_usage_bridge.dart`: with one, each model call's provider tokens are
+  /// posted to the app. Either bridge is inserted on its own: usage is kept
+  /// even where no one is at the computer to answer a question.
   static String content({
     required String version,
     DshRoute? route,
     bool withBash = false,
     String? askBridge,
+    String? usageBridge,
   }) => _patch([
     header(version),
     '',
@@ -69,12 +74,18 @@ abstract final class DshPatch {
       '    model: ${route.model}',
     ],
     if (withBash) ...['- id: tool-bash', '  disabled: false'],
-    if (askBridge != null) ...[
+    if (askBridge != null || usageBridge != null) ...[
       '- insert:',
-      '    - id: baocode-ask',
-      "      name: '@deepseek-ai/dsh-tool-ask-user'",
-      '    - id: baocode-ask-bridge',
-      "      name: '$askBridge'",
+      if (askBridge != null) ...[
+        '    - id: baocode-ask',
+        "      name: '@deepseek-ai/dsh-tool-ask-user'",
+        '    - id: baocode-ask-bridge',
+        "      name: '$askBridge'",
+      ],
+      if (usageBridge != null) ...[
+        '    - id: baocode-usage-bridge',
+        "      name: '$usageBridge'",
+      ],
     ],
   ]);
 
@@ -160,14 +171,16 @@ abstract final class DshPatch {
   /// there). [dshHome] is where that profile is looked for: `DSH_HOME`, else
   /// `~/.dsh`; a test gives its own. [askBridge] is the answerer's `file://`
   /// URL (`dsh_ask_bridge.dart`), or null where no question endpoint could be
-  /// started. [route] is the machine's own (`dsh_route.dart`), or null for
-  /// the profile's.
+  /// started; [route] is the machine's own (`dsh_route.dart`), or null for
+  /// the profile's; [usageBridge] is the token accountant's
+  /// (`dsh_usage_bridge.dart`), or null where none could be written.
   static Future<String> ensure({
     required DshInstall install,
     required String directory,
     DshRoute? route,
     bool withBash = false,
     String? askBridge,
+    String? usageBridge,
     String? dshHome,
   }) async {
     final file = File(p.join(directory, fileName));
@@ -176,6 +189,7 @@ abstract final class DshPatch {
       route: route,
       withBash: withBash && await _pluginInstalled(dshHome),
       askBridge: askBridge,
+      usageBridge: usageBridge,
     );
     try {
       if (await file.readAsString() == text) return file.path;

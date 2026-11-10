@@ -162,7 +162,7 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 6. **审批只在 shell 越界时出现**：普通文件写入不问（F11），见 §4。
 7. **读不作围栏**：agent 仍可读 `~/.dsh`（包括凭据文件）并经网络把内容发出去。沙箱限制的是写与命令，不是读（F11、F24）。
 8. **跨内核的“上次选择”按 kind 全局保存**：不同内核共用一份按 kind（model/effort/permission）记的选择；DSH 会丢弃它不认识的 id（例如 Claude 的 model id），所以切内核后可能要重选档位/模型。
-9. **用量不进 BaoCode 的账本**：`usage_update` 只用来刷新工具栏的上下文占用与窗口大小；不声明 `ReportsUsage`，设置→用量里没有 DSH 的账。
+9. **用量进 BaoCode 的账本**：`usage_update` 只用来刷新工具栏的上下文占用与窗口大小；每次模型调用的 **tokens** 由补丁挂的 `baocode-usage-bridge` 从 dsh 的 `assistant/message` 事件取出，经本机端点记入设置→用量，数值与供应商报的一致。金额是估算：本机路由的 model 没在设置→用量里设价时，若它在内置估算表里（目前是 `deepseek-v4.1-flash`）就用 DeepSeek 公开价，否则仍显示未定价；设了价就用你的。dsh 仍不声明 `ReportsUsage`（那是账号额度，不是每笔调用）。
 10. **切视图回来要重新握手（约 6 秒）**：视图全关时内核释放进程，下次进入重新定位、起进程、`initialize`，再 `session/resume`。这 6 秒是 dsh 的启动时间（F20），不是卡死。
 11. 其他不做的：token 级流式、会话内切换档位、fork/rewind/重命名/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1）。
 12. 本设计的补丁只声明 `model`，没有声明 `reasoningEffort`（F6）：dsh 不报 `reasoning_effort`，所以思考强度选择器不显示（内核实现了 `SelectsEffort`，选项为空时 UI 自然不显示）。
@@ -343,7 +343,7 @@ resume 不会重放历史，也不会改权限档位（F16）。
 | 侧栏看不到旧 DSH 对话 | 正常：不列历史；去 dsh web 看（§5） |
 | 切走再回来要等约 6 秒 | 正常：重新握手 + resume（F20）；不是卡死 |
 | 上下文窗口显示 512K 但用量不涨 | 用量在 dsh 发 `usage_update` 时更新（每条 assistant 消息之后，F19）；没有该更新就还是初值 |
-| 设置→用量里没有 DSH | 正常：不声明 `ReportsUsage`（§5） |
+| 设置→用量里没有 DSH | 先确认这次对话是在修复后启动的（旧进程没有 usage 桥；修复前的调用不回填）；DSH 不声明 `ReportsUsage`（账号额度），但每笔调用的 tokens 会经 `baocode-usage-bridge` 记账（§5 第 9 条） |
 | 图片被丢掉并提示 | 该路由的 `promptCapabilities.image` 为 false |
 | 版本提醒 | dsh 低于验证版本，仍可使用 |
 | 想换权限档 | 首条消息后不可换，新开对话（F16） |
@@ -379,6 +379,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 中途停止可用，停止后还能继续对话
 - [ ] 切换模型立即生效，不重启；dsh 没报思考强度时没有该选项
 - [ ] 第一次回复前上下文窗口显示 512K，之后随 `usage_update` 变化
+- [ ] 设置 → 用量里能看到这次 DSH 对话的调用：输入/输出/缓存 tokens 与 dsh 的账一致，金额有估算价
 - [ ] 视图切走再回来约 6 秒后可用，会话接着上一轮
 - [ ] 错误轮显示 error 气泡，按钮恢复可用，内核仍是 ready
 - [ ] 退出应用后没有残留的 dsh 进程（任务管理器 / `tasklist`）
@@ -425,6 +426,9 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 | `lib/kernel/dsh/dsh_questions.dart` | `ask_user_question` → `QuestionRequest`，应答/跳过/取消 |
 | `lib/kernel/dsh/dsh_question_server.dart`、`dsh_question_server_io.dart`、`dsh_question_server_stub.dart` | 本机 loopback 提问端点：token、POST/轮询/取消，把选项标签映射成 dsh 的 `{selected, custom}` |
 | `lib/kernel/dsh/dsh_ask_bridge.dart` | 写 `ask_bridge.mjs`（监听 dsh 的 `user-questions/request`，轮询上面的端点），返回补丁用的 `file://` URL |
+| `lib/kernel/dsh/dsh_usage_server.dart`、`dsh_usage_server_io.dart`、`dsh_usage_server_stub.dart` | 本机 loopback 用量端点：token、`POST /usage`，把报告交给内核 |
+| `lib/kernel/dsh/dsh_usage_bridge.dart` | 写 `usage_bridge.mjs`（监听 dsh 的 `assistant/message`，把供应商 tokens POST 到上面的端点），返回补丁用的 `file://` URL |
+| `lib/kernel/dsh/dsh_usage_meter.dart` | 把一份用量报告变成 `UsageCall`：精确 tokens、时长、主/子代理归属 |
 | `lib/kernel/dsh/dsh_notices.dart` | 会话内提示（版本、凭据、图片）与按 ref 的凭据预检 |
 | `lib/kernel/dsh/dsh_path_setting.dart` | `dshCode.path` 的解析与 `current` 缝 |
 | `lib/kernel/dsh/mock_dsh_transport.dart` | 测试用的脚本化 dsh 进程 |
@@ -440,6 +444,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - `test/kernel/dsh_turn_test.dart`：一轮的事件顺序（含带图时提示在同一轮内、握手前发图等握手）、文本、思考、工具、usage、错误、取消；
 - `test/kernel/dsh_approval_test.dart`：审批的挂起、三种应答线形、理由回退、迟到应答；
 - `test/kernel/dsh_question_server_test.dart`：桥插件文件的写入与不重写、端点的 token 校验、未知问题 404；
+- `test/kernel/dsh_usage_server_test.dart`：usage 插件文件的写入与不重写、端点的 token 校验、用量报告解码；`dsh_kernel_test.dart` 追加精确 tokens、时长、子代理归属与无 token 不记；
 - `test/kernel/dsh_kernel_test.dart`（追加）：问题走面板、回答的 `selected`/`custom`、跳过、release 时 `cancelled`、无人在场时不插桥；
 - `test/e2e_dsh_real_test.dart`：`-t dsh-e2e` 才跑，真 dsh 调 `ask_user_question`，自动替用户答 Apple，断言工具结果与回复；
 - `test/kernel/dsh_integration_test.dart`：跨票回归，prepare → 首条消息建会话 → 工具+审批 → 下一轮 → 出错轮 → release → prepare/resume → dispose；

@@ -826,6 +826,9 @@ class UsagePrices extends ChangeNotifier {
     if (_pick(_prices[any], at) case final price?) {
       return (price: price, rate: rate, key: any);
     }
+    if (DeepSeekPrices.of(model) case final price?) {
+      return (price: price, rate: rate, key: null);
+    }
     if (upstream == ClaudePrices.upstream || rate != null) {
       if (ClaudePrices.of(model) case final price?) {
         return (price: price, rate: rate, key: null);
@@ -1018,6 +1021,31 @@ class UsagePrices extends ChangeNotifier {
       _ => '$number $currency',
     };
   }
+}
+
+/// DeepSeek's published token prices, the one guess for a model no price in
+/// the settings names: DSH's route (`stepcodev2/deepseek-v4.1-flash`) is one,
+/// and its calls keep the provider's exact tokens without a price of their
+/// own. The money is an estimate; a price in Settings → Usage replaces it,
+/// and an upstream's rate still applies.
+abstract final class DeepSeekPrices {
+  static const source = 'https://api-docs.deepseek.com/quick_start/pricing';
+
+  static final Map<String, ModelPrice> prices = {
+    'deepseek-v4.1-flash': const ModelPrice(
+      input: 0.28,
+      output: 0.42,
+      cacheRead: 0.028,
+      cacheWrite: 0.28,
+      source: source,
+    ),
+  };
+
+  /// [model]'s, by its name without what may follow it (`[1m]`, a date).
+  static ModelPrice? of(String model) =>
+      prices[model
+          .replaceFirst(RegExp(r'\[[^\]]*\]$'), '')
+          .replaceFirst(RegExp(r'-\d{8}$'), '')];
 }
 
 /// What Anthropic's API asks for Claude's models, a million tokens: Claude
