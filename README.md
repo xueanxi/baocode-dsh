@@ -3,7 +3,9 @@
 
 **English** · [简体中文](README_CN.md) · [日本語](README_JA.md) · [Français](README_FR.md) · [Español](README_ES.md)
 
-An awesome, easy-to-use desktop UI for [Claude Code](https://github.com/anthropics/claude-code), with a millisecond-fast IDE built in.
+An awesome, easy-to-use desktop UI for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`), with a millisecond-fast IDE built in.
+
+BaoCode runs `dsh` as its agent, so it keeps working where Claude Code is unavailable or disallowed. Claude Code remains supported as a second kernel.
 
 [Website](https://baocode.dev) · [Download](https://baocode.dev/download) · [Changelog](https://baocode.dev/changelog)
 
@@ -13,20 +15,20 @@ An awesome, easy-to-use desktop UI for [Claude Code](https://github.com/anthropi
 
 ## Why
 
-We use Claude Code every day. The terminal is a fine place to run it, but a poor place to read it: long diffs scroll out of view, earlier steps are hard to find again, and reviewing what changed means switching to another app. BaoCode is the window we wanted around it.
+We use `dsh` every day. The terminal is a fine place to run it, but a poor place to read it: long diffs scroll out of view, earlier steps are hard to find again, and reviewing what changed means switching to another app. BaoCode is the window we wanted around it.
 
-BaoCode has no agent of its own, by design. Claude Code is the agent, and its ecosystem is unmatched: its tools, skills, plugins, MCP servers, subagents and hooks. BaoCode gives it the interface it deserves and makes everything around it work out of the box. It runs the Claude Code you already have, with your settings and your `CLAUDE.md`.
+BaoCode has no agent of its own, by design. `dsh` is the agent, with its tools, skills and plugins. BaoCode gives it the interface it deserves and makes everything around it work out of the box: the `dsh` you already have, with your settings and its profiles. Claude Code is supported as a second kernel, for the remote hosts and workflows that still need it — but `dsh` is what the app is built around, and the one to reach for where Claude Code is banned.
 
 ## Features
 
-- **An interface made for reading.** Reads, searches and commands fold into single lines. Keep or Undo each change Claude made, file by file; checkpoints live in BaoCode's own data folder, never in your repository's `.git`.
-- **Goals.** Type `/goal` and what you want done, and Claude keeps working until it is met, with the goal and its progress above the input.
+- **An interface made for reading.** Reads, searches and commands fold into single lines. Keep or Undo each change the agent made, file by file; checkpoints live in BaoCode's own data folder, never in your repository's `.git`.
+- **Goals.** Type `/goal` and what you want done, and `dsh` keeps working until it is met, with the goal and its progress above the input.
 - **A rich-text input.** Code copied from the editor arrives as a reference to its file and lines; pasted images and dropped files sit where you put them in the sentence.
-- **Fast IDE.** An editor, a terminal and Source Control with a commit graph, built in. Claude Code drafts your commit messages. VS Code, IntelliJ, Sublime and Atom keymaps, and language servers.
+- **Fast IDE.** An editor, a terminal and Source Control with a commit graph, built in. `dsh` drafts your commit messages. VS Code, IntelliJ, Sublime and Atom keymaps, and language servers.
 - **Your VS Code themes.** The editor, the conversation and the sidebar all follow them.
 - **Skills, MCP servers and more.** Plugins, MCP servers, skills, subagents, rules, commands and hooks in one place, for you or for a single project.
-- **Any model.** Add an upstream that speaks Anthropic's API, OpenAI's Chat Completions or OpenAI's Responses; a local proxy translates between it and Claude Code. Keys stay in the system keychain.
-- **Remote projects over SSH.** The window stays on your machine; files, Git, search, terminals, language servers and Claude Code run on the remote host (Linux, x64 or arm64).
+- **Any model, for Claude Code.** Add an upstream that speaks Anthropic's API, OpenAI's Chat Completions or OpenAI's Responses; a local proxy translates between it and Claude Code. Keys stay in the system keychain.
+- **Remote projects over SSH.** The window stays on your machine; files, Git, search, terminals, language servers and Claude Code run on the remote host (Linux, x64 or arm64). `dsh` runs on this machine.
 - **Notifications.** A system notification, a sound and a badge when an agent needs you or finishes. Close the window and the agents keep running in the menu bar or tray.
 - **Updates itself** in the background, or manually, or not at all.
 
@@ -43,8 +45,9 @@ VS Code and Cursor are built on Electron: each window is a web page, and every c
 
 ## Requirements
 
-- macOS 12 or later (Apple silicon or Intel, one download each), Windows 10 or later (x64), or Linux: Ubuntu 20.04 or later and other Debian-based distributions (x64 or arm64, a .deb each).
-- [Claude Code](https://github.com/anthropics/claude-code), installed.
+- macOS 12 or later (Apple silicon or Intel, one download each), Windows 10 or later (x64), or Linux: Ubuntu 22.04 or later and other Debian-based distributions (x64 or arm64, a .deb each).
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`), installed: `npm i -g @deepseek-ai/dsh`.
+- Optional: [Claude Code](https://github.com/anthropics/claude-code), for remote projects and the Claude Code kernel.
 
 ## Building from source
 
@@ -94,7 +97,7 @@ BaoCode is licensed under the [GNU General Public License v3.0](LICENSE)
 own licenses, found next to them in the source tree.
 
 BaoCode is an independent project, not affiliated with or endorsed by
-Anthropic.
+Anthropic or DeepSeek.
 
 <img width="300" height="356" alt="image" src="https://github.com/user-attachments/assets/d8288f00-a7f6-41fd-8cbb-f99acfe59418" />
 

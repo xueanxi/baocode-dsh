@@ -2,7 +2,9 @@
 
 [English](README.md) · [简体中文](README_CN.md) · **日本語** · [Français](README_FR.md) · [Español](README_ES.md)
 
-[Claude Code](https://github.com/anthropics/claude-code) のための、使いやすいデスクトップ UI。ミリ秒単位で応答する高速な IDE を内蔵しています。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）のための、使いやすいデスクトップ UI。ミリ秒単位で応答する高速な IDE を内蔵しています。
+
+BaoCode は `dsh` をエージェントとして動かすため、Claude Code が利用できない、または禁止されている環境でも使えます。Claude Code は第二のカーネルとして引き続きサポートされます。
 
 [公式サイト](https://baocode.dev) · [ダウンロード](https://baocode.dev/download) · [変更履歴](https://baocode.dev/changelog)
 
@@ -14,20 +16,20 @@
 
 ## 開発の理由
 
-私たちは毎日 Claude Code を使っています。ターミナルは実行には適していますが、内容を読むには不便です。長い diff は画面外へ流れ、以前の手順を探し直すのは難しく、変更の確認にはアプリの切り替えが必要になります。BaoCode は、私たちが欲しかったそのためのウィンドウです。
+私たちは毎日 `dsh` を使っています。ターミナルは実行には適していますが、内容を読むには不便です。長い diff は画面外へ流れ、以前の手順を探し直すのは難しく、変更の確認にはアプリの切り替えが必要になります。BaoCode は、私たちが欲しかったそのためのウィンドウです。
 
-BaoCode は意図的に独自のエージェントを持ちません。エージェントは Claude Code です。そのツール、スキル、プラグイン、MCP サーバー、サブエージェント、hooks を活かしながら、BaoCode は読みやすい UI とすぐに使える周辺機能を提供します。すでにインストールされた Claude Code を、既存の設定と `CLAUDE.md` のまま実行します。
+BaoCode は意図的に独自のエージェントを持ちません。エージェントは `dsh` で、そのツール、スキル、プラグインを備えています。BaoCode は読みやすい UI とすぐに使える周辺機能を提供します。すでにインストールされた `dsh` を、既存の設定とその profile のまま実行します。Claude Code は第二のカーネルとして残り、リモートホストや依然として必要なワークフローに使えます。ただし BaoCode が中心に据えるのは `dsh` であり、Claude Code が禁止されている環境では `dsh` を選ぶべきです。
 
 ## 機能
 
-- **読みやすさを重視した UI。** ファイルの読み込み、検索、コマンドを一行に折りたためます。Claude の変更をファイルごとに保持または取り消せます。チェックポイントは BaoCode のデータフォルダーに保存され、リポジトリの `.git` には入りません。
-- **目標。** `/goal` と実現したい内容を入力すると、Claude が目標達成まで作業を続けます。目標と進捗は入力欄の上に表示されます。
+- **読みやすさを重視した UI。** ファイルの読み込み、検索、コマンドを一行に折りたためます。エージェントの変更をファイルごとに保持または取り消せます。チェックポイントは BaoCode のデータフォルダーに保存され、リポジトリの `.git` には入りません。
+- **目標。** `/goal` と実現したい内容を入力すると、`dsh` が目標達成まで作業を続けます。目標と進捗は入力欄の上に表示されます。
 - **リッチテキスト入力。** エディターからコピーしたコードはファイルと行への参照として挿入されます。画像の貼り付けやファイルのドロップも、文中の指定位置に配置できます。
-- **高速 IDE。** エディター、ターミナル、コミットグラフ付きソース管理を内蔵しています。Claude Code によるコミットメッセージの作成、キーマップ、言語サーバーに対応しています。
+- **高速 IDE。** エディター、ターミナル、コミットグラフ付きソース管理を内蔵しています。`dsh` によるコミットメッセージの作成、キーマップ、言語サーバーに対応しています。
 - **統一されたテーマ。** エディター、会話、サイドバーに同じテーマを適用できます。
 - **スキル、MCP サーバーなど。** プラグイン、MCP サーバー、スキル、サブエージェント、ルール、コマンド、hooks を一か所で管理し、個人用またはプロジェクト単位で設定できます。
-- **複数のモデル。** Anthropic API、OpenAI Chat Completions、OpenAI Responses に対応するプロバイダーを追加できます。ローカルプロキシが Claude Code とのプロトコル変換を行い、キーはシステムのキーチェーンに保存されます。
-- **SSH 経由のリモートプロジェクト。** UI は手元のマシンに残り、ファイル、Git、検索、ターミナル、言語サーバー、Claude Code はリモートホスト上で動作します（Linux、x64 または arm64）。
+- **複数のモデル（Claude Code）。** Anthropic API、OpenAI Chat Completions、OpenAI Responses に対応するプロバイダーを追加できます。ローカルプロキシが Claude Code とのプロトコル変換を行い、キーはシステムのキーチェーンに保存されます。
+- **SSH 経由のリモートプロジェクト。** UI は手元のマシンに残り、ファイル、Git、検索、ターミナル、言語サーバー、Claude Code はリモートホスト上で動作します（Linux、x64 または arm64）。`dsh` はこのマシンで動作します。
 - **通知。** エージェントが操作を求めたときや作業を終えたときに、システム通知、音、バッジで知らせます。ウィンドウを閉じてもメニューバーやトレイで作業を続けられます。
 - **更新。** バックグラウンドでの自動更新、手動更新、更新の無効化を選べます。
 
@@ -44,8 +46,9 @@ BaoCode は GPU に直接 UI を描画するネイティブアプリです。以
 
 ## 必要環境
 
-- macOS 12 以降（Apple silicon と Intel 向けにそれぞれ配布）、Windows 10 以降（x64）、または Linux：Ubuntu 20.04 以降とその他の Debian 系ディストリビューション（x64 と arm64 向けにそれぞれ .deb）。
-- [Claude Code](https://github.com/anthropics/claude-code) がインストールされていること。
+- macOS 12 以降（Apple silicon と Intel 向けにそれぞれ配布）、Windows 10 以降（x64）、または Linux：Ubuntu 22.04 以降とその他の Debian 系ディストリビューション（x64 と arm64 向けにそれぞれ .deb）。
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）がインストールされていること：`npm i -g @deepseek-ai/dsh`。
+- 任意：[Claude Code](https://github.com/anthropics/claude-code) がインストールされていること（リモートプロジェクトと Claude Code カーネル用）。
 
 ## ソースからのビルド
 
@@ -90,4 +93,4 @@ Issue と Pull Request を歓迎します。変更はまず Issue で相談し�
 
 BaoCode は [GNU General Public License v3.0](LICENSE)（GPL-3.0-only）で公開されています。[packages/](packages) 内のエディターおよび端末パッケージ（bao_editor、bao_xterm、bao_pty）は MIT ライセンスです。第三者のコンポーネントにはそれぞれのライセンスが適用され、ファイルは対応するソースの隣にあります。
 
-BaoCode は独立したプロジェクトであり、Anthropic との提携や同社による推奨を意味しません。
+BaoCode は独立したプロジェクトであり、Anthropic または DeepSeek との提携や、両社による推奨を意味しません。
