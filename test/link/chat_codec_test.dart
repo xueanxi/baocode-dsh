@@ -10,6 +10,9 @@ void main() {
       ChatCodec.decode(jsonDecode(jsonEncode(ChatCodec.encode(item))))!
           as ToolCallItem;
 
+  T roundTripItem<T extends ChatItem>(T item) =>
+      ChatCodec.decode(jsonDecode(jsonEncode(ChatCodec.encode(item))))! as T;
+
   final picture = ImageAttachment(
     bytes: Uint8List.fromList([1, 2, 3]),
     mediaType: 'image/png',
@@ -94,6 +97,34 @@ void main() {
       {'content': 'Read it', 'status': 'completed'},
       {'content': 'Fix it', 'status': 'in_progress'},
     ]);
+  });
+
+  test('a command card keeps its command, output and background mark', () {
+    final step = roundTripItem(
+      const TerminalItem(
+        command: 'flutter test test/kernel/dsh',
+        description: 'Run the dsh tests',
+        output: 'All tests passed!',
+        status: CommandStatus.running,
+        background: true,
+      ),
+    );
+    expect(
+      (
+        step.command,
+        step.description,
+        step.output,
+        step.status,
+        step.background,
+      ),
+      (
+        'flutter test test/kernel/dsh',
+        'Run the dsh tests',
+        'All tests passed!',
+        CommandStatus.running,
+        true,
+      ),
+    );
   });
 
   test('a browser\'s action and a turn\'s spending go too', () {

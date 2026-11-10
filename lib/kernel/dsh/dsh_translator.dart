@@ -208,17 +208,29 @@ class DshTranslator {
         };
         // dsh writes the whole todo list in the call itself (`todo_write`):
         // the items are what the step shows, its line the one in progress
-        // (see todoStep). Every other call is a command (F9).
+        // (see todoStep). A shell call (`bash`, `pwsh`) is the command card
+        // Claude Code's Bash gets: its description on the line, the whole
+        // command one tap away. Every other call is a command (F9).
         final todo = title.trim().toLowerCase() == 'todo_write';
+        final command = _isShell(title) ? _string(input['command']) : null;
+        final shell = command == null || command.trim().isEmpty
+            ? null
+            : command;
         final detail = _oneLine(raw);
-        final call = _ToolCall(
-          kind: todo ? ToolKind.todo : ToolKind.command,
-          tool: todo ? 'todo_write' : null,
-          input: todo ? input : const {},
-          target: todo ? _todoNow(input['todos']) : title,
-          label: todo ? null : title,
-          detail: todo || detail.isEmpty ? null : detail,
-        );
+        final call = shell != null
+            ? _ToolCall.shell(
+                command: shell,
+                description: _string(input['description']),
+                background: input['run_in_background'] == true,
+              )
+            : _ToolCall(
+                kind: todo ? ToolKind.todo : ToolKind.command,
+                tool: todo ? 'todo_write' : null,
+                input: todo ? input : const {},
+                target: todo ? _todoNow(input['todos']) : title,
+                label: todo ? null : title,
+                detail: todo || detail.isEmpty ? null : detail,
+              );
         _tools[id] = call;
         _running.add(id);
         emit(ItemUpserted(nextSeq(), id, call.item(ToolStatus.running)));
@@ -323,6 +335,16 @@ class DshTranslator {
     return lines.isEmpty ? null : lines.join('\n');
   }
 
+  /// Whether [title] names a shell tool: dsh calls its tools `bash` and
+  /// `pwsh`, the persistent pair keeping the same names.
+  static bool _isShell(String title) => switch (title.trim().toLowerCase()) {
+    'bash' || 'pwsh' => true,
+    _ => false,
+  };
+
+  /// [value] as text, when it is.
+  static String? _string(Object? value) => value is String ? value : null;
+
   /// [value] on one line, for a tool's detail.
   static String _oneLine(Object? value) => switch (value) {
     null => '',
@@ -358,8 +380,8 @@ class DshTranslator {
 }
 
 /// A tool call as first seen, kept to show it again when its update arrives:
-/// that one names only its id (F9), and what a todo step shows is in the
-/// call's own input.
+/// that one names only its id (F9), and what a shell or todo step shows is in
+/// the call's own input.
 class _ToolCall {
   const _ToolCall({
     required this.kind,
@@ -368,7 +390,22 @@ class _ToolCall {
     this.input = const {},
     this.label,
     this.detail,
-  });
+  }) : command = null,
+       description = null,
+       background = false;
+
+  /// A shell call, shown as a command card ([TerminalItem]) rather than a
+  /// step: its [description] on the line, the whole [command] in the body.
+  const _ToolCall.shell({
+    required this.command,
+    this.description,
+    this.background = false,
+  }) : kind = ToolKind.command,
+       target = '',
+       tool = null,
+       input = const {},
+       label = null,
+       detail = null;
 
   final ToolKind kind;
   final String target;
@@ -383,18 +420,43 @@ class _ToolCall {
   final String? label;
   final String? detail;
 
+  /// A shell call's command; null for another call.
+  final String? command;
+
+  /// What the command is for, in the agent's words.
+  final String? description;
+
+  /// Whether it was left running on its own.
+  final bool background;
+
   /// The item to show for it, [status] as it now stands and [output] what
   /// it returned.
-  ToolCallItem item(ToolStatus status, {String? output}) => ToolCallItem(
-    kind: kind,
-    tool: tool,
-    input: input,
-    target: target,
-    label: label,
-    detail: detail,
-    status: status,
-    output: output,
-  );
+  ChatItem item(ToolStatus status, {String? output}) {
+    final command = this.command;
+    if (command != null) {
+      return TerminalItem(
+        command: command,
+        description: description,
+        output: output ?? '',
+        status: switch (status) {
+          ToolStatus.running => CommandStatus.running,
+          ToolStatus.succeeded => CommandStatus.succeeded,
+          ToolStatus.failed || ToolStatus.denied => CommandStatus.failed,
+        },
+        background: background,
+      );
+    }
+    return ToolCallItem(
+      kind: kind,
+      tool: tool,
+      input: input,
+      target: target,
+      label: label,
+      detail: detail,
+      status: status,
+      output: output,
+    );
+  }
 }
 
 /// [value] as a whole number: dsh's JSON numbers arrive as either kind.

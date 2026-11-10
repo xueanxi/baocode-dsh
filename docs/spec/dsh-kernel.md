@@ -32,7 +32,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 | F6 | `configOptions`：`model`（按 provider 分组，值是 `JSON.stringify([provider, model])` 的不透明串）与可选的 `reasoning_effort`。**用本设计的补丁时只有 `model`**（该路由未声明 reasoningEfforts）；模型列表会列出所有已挂 adapter，包括没有凭据的 |
 | F7 | `session/update` 六种：`agent_thought_chunk`、`agent_message_chunk`、`tool_call`、`tool_call_update`、`usage_update`、`config_option_update` |
 | F8 | 文本按**已提交的整条消息**送达，一次 `agent_message_chunk` 带完整文本（实测），没有 token 流；一轮多步会有多条这样的消息，需按到达顺序成为多个条目。**chunk 不带消息 id**，id 得自己生成 |
-| F9 | `tool_call {toolCallId, title, kind:"other", status:"in_progress", rawInput}`；`tool_call_update {toolCallId, status: completed|failed, content}`；`kind` 恒为 `"other"`，没有中间进度 |
+| F9 | `tool_call {toolCallId, title, kind:"other", status:"in_progress", rawInput}`；`title` 是工具名（如 `bash`、`read`），`rawInput` 是本次调用的参数对象；`tool_call_update {toolCallId, status: completed|failed, content}`；`kind` 恒为 `"other"`，没有中间进度 |
 | F10 | 审批是服务端请求：`session/request_permission {sessionId, toolCall:{toolCallId}, options:[{optionId:"allow-once",kind:"allow_once"},{optionId:"reject-once",kind:"reject_once"}]}`。**请求里没有工具名与理由**；理由要从前一条同 `toolCallId` 的 `tool_call.rawInput.justification` 关联，拿不到就明说 |
 | F11 | 审批只在 **shell 沙箱升级**时触发；工作区内普通读写与命令不问（实测：写到工作区外也没有询问）。读不作围栏：agent 仍可读 `~/.dsh`（含凭据文件）并经网络外发 |
 | F12 | `session/prompt {sessionId, prompt:[{type:"text"}]}` → `{stopReason}`；并发第二个 prompt → `-32602 a prompt is already in flight`；失败 → `-32603 "Internal error"`，细节在 `data.details = "turn failed: …"`，**没有 stopReason** |
@@ -208,8 +208,8 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 |---|---|
 | `agent_message_chunk` | `ItemUpserted('message:<n>', AssistantTextItem(text))`（整条，不流式） |
 | `agent_thought_chunk` | `ItemUpserted('thought:<n>', ThinkingItem(text))`；`seconds` 取与上一个 step 的间隔，第一段从本轮开始算（dsh 不计时） |
-| `tool_call` | `ItemUpserted(toolCallId, ToolCallItem(...))`：`title == todo_write` 时 `kind: ToolKind.todo`、`tool: "todo_write"`、`input: rawInput`、`target: 进行中的那一项`（清单就在调用里，展开即整份列表）；其余 `kind: ToolKind.command, target: title, label: title, detail: <rawInput 单行摘要>, status: running` |
-| `tool_call_update` | 同 id：按首次 `tool_call` 的 kind/tool/input/target 重建（todo 的清单不靠 update）；`status: succeeded/failed`，`output:` 拼 `content` 里的文本块；`kind` 恒 `other`，`ToolKind` 没有 other 成员，不为它加成员 |
+| `tool_call` | `ItemUpserted(toolCallId, …)`：`title == todo_write` 时 `ToolCallItem(kind: todo, tool: "todo_write", input: rawInput, target: 进行中的那一项)`；`title` 为 `bash`/`pwsh` 时 `TerminalItem(command: rawInput.command, description: rawInput.description, background: rawInput.run_in_background)`（与 Claude Code 的 Bash 同一张命令卡）；其余 `ToolCallItem(kind: command, target: title, label: title, detail: <rawInput 单行摘要>, status: running)` |
+| `tool_call_update` | 同 id：按首次 `tool_call` 重建（todo 的清单、命令卡的命令与描述不靠 update）；`status: succeeded/failed`（命令卡为 `CommandStatus`），`output:` 拼 `content` 里的文本块；`kind` 恒 `other`，`ToolKind` 没有 other 成员，不为它加成员 |
 | `usage_update` | `UsageReported(ContextUsage(window: size, used: used))`，并记下 size |
 | `config_option_update` | 重建选项 + `emitInfoChanged()` |
 | `session/prompt` 的 `{stopReason}` | `TurnEnded(turnId)`；`cancelled` → `interrupted: true` |
