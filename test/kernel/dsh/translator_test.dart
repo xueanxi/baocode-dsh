@@ -251,7 +251,8 @@ void main() {
     );
   });
 
-  test('another tool still reads as a command, its name its line', () {
+  test('a read call is the read step: the file\'s name on the line, its whole '
+      'path and lines one tap away', () {
     final events = <KernelEvent>[];
     final translator = DshTranslator(
       emit: events.add,
@@ -265,7 +266,203 @@ void main() {
       'toolCallId': 'call-1',
       'title': 'read',
       'status': 'in_progress',
-      'rawInput': {'path': 'lib/main.dart'},
+      'rawInput': {
+        'file_path': 'lib/kernel/dsh/dsh_translator.dart',
+        'offset': 10,
+        'limit': 10,
+      },
+    });
+    translator.update({
+      'sessionUpdate': 'tool_call_update',
+      'toolCallId': 'call-1',
+      'status': 'completed',
+      'content': [
+        {
+          'type': 'content',
+          'content': {'type': 'text', 'text': '<path>…</path>'},
+        },
+      ],
+    });
+
+    final items = [
+      for (final event in events)
+        if (event is ItemUpserted && event.id == 'call-1')
+          event.item as ToolCallItem,
+    ];
+    expect(items, hasLength(2));
+    expect(
+      (
+        items.first.kind,
+        items.first.target,
+        items.first.path,
+        items.first.detail,
+        items.first.status,
+        items.first.output,
+      ),
+      (
+        ToolKind.read,
+        'dsh_translator.dart',
+        'lib/kernel/dsh/dsh_translator.dart',
+        'L10-19',
+        ToolStatus.running,
+        null,
+      ),
+    );
+    // The file itself opens from the row: what it returned is not kept.
+    expect(
+      (items.last.kind, items.last.status, items.last.output),
+      (ToolKind.read, ToolStatus.succeeded, null),
+    );
+  });
+
+  test('a read that failed keeps the reason as its output', () {
+    final events = <KernelEvent>[];
+    final translator = DshTranslator(
+      emit: events.add,
+      nextSeq: () => events.length,
+      options: (_) {},
+    );
+
+    translator.begin('turn-1', text: 'Go', images: const []);
+    translator.update({
+      'sessionUpdate': 'tool_call',
+      'toolCallId': 'call-1',
+      'title': 'read',
+      'status': 'in_progress',
+      'rawInput': {'file_path': 'missing.dart'},
+    });
+    translator.update({
+      'sessionUpdate': 'tool_call_update',
+      'toolCallId': 'call-1',
+      'status': 'failed',
+      'content': [
+        {
+          'type': 'content',
+          'content': {'type': 'text', 'text': 'ENOENT: missing.dart'},
+        },
+      ],
+    });
+
+    final item = [
+      for (final event in events)
+        if (event is ItemUpserted && event.id == 'call-1')
+          event.item as ToolCallItem,
+    ].last;
+    expect(
+      (item.kind, item.target, item.path, item.detail, item.status),
+      (ToolKind.read, 'missing.dart', 'missing.dart', null, ToolStatus.failed),
+    );
+    expect(item.output, 'ENOENT: missing.dart');
+  });
+
+  test('a send_message call is the message step: what it says on the line, '
+      'all of it one tap away', () {
+    final events = <KernelEvent>[];
+    final translator = DshTranslator(
+      emit: events.add,
+      nextSeq: () => events.length,
+      options: (_) {},
+    );
+
+    translator.begin('turn-1', text: 'Go', images: const []);
+    translator.update({
+      'sessionUpdate': 'tool_call',
+      'toolCallId': 'call-1',
+      'title': 'send_message',
+      'status': 'in_progress',
+      'rawInput': {
+        'agent_id': 'agent-1',
+        'message': 'Standards review\nof the diff',
+      },
+    });
+    translator.update({
+      'sessionUpdate': 'tool_call_update',
+      'toolCallId': 'call-1',
+      'status': 'completed',
+      'content': [
+        {
+          'type': 'content',
+          'content': {
+            'type': 'text',
+            'text': 'message delivered to agent agent-1',
+          },
+        },
+      ],
+    });
+
+    final items = [
+      for (final event in events)
+        if (event is ItemUpserted && event.id == 'call-1')
+          event.item as ToolCallItem,
+    ];
+    expect(items, hasLength(2));
+    expect(
+      (items.first.kind, items.first.target, items.first.status),
+      (ToolKind.message, 'Standards review of the diff', ToolStatus.running),
+    );
+    // Delivered: the whole message opens from the line, not only its first.
+    expect(
+      (items.last.kind, items.last.target, items.last.status),
+      (ToolKind.message, 'Standards review of the diff', ToolStatus.succeeded),
+    );
+    expect(items.last.output, 'Standards review\nof the diff');
+  });
+
+  test('a message that failed keeps the reason as its output', () {
+    final events = <KernelEvent>[];
+    final translator = DshTranslator(
+      emit: events.add,
+      nextSeq: () => events.length,
+      options: (_) {},
+    );
+
+    translator.begin('turn-1', text: 'Go', images: const []);
+    translator.update({
+      'sessionUpdate': 'tool_call',
+      'toolCallId': 'call-1',
+      'title': 'send_message',
+      'status': 'in_progress',
+      'rawInput': {'agent_id': 'agent-9', 'message': 'Are you there?'},
+    });
+    translator.update({
+      'sessionUpdate': 'tool_call_update',
+      'toolCallId': 'call-1',
+      'status': 'failed',
+      'content': [
+        {
+          'type': 'content',
+          'content': {'type': 'text', 'text': 'unknown agent agent-9'},
+        },
+      ],
+    });
+
+    final item = [
+      for (final event in events)
+        if (event is ItemUpserted && event.id == 'call-1')
+          event.item as ToolCallItem,
+    ].last;
+    expect(
+      (item.kind, item.target, item.status),
+      (ToolKind.message, 'Are you there?', ToolStatus.failed),
+    );
+    expect(item.output, 'unknown agent agent-9');
+  });
+
+  test('another tool still reads as a command, its name its line', () {
+    final events = <KernelEvent>[];
+    final translator = DshTranslator(
+      emit: events.add,
+      nextSeq: () => events.length,
+      options: (_) {},
+    );
+
+    translator.begin('turn-1', text: 'Go', images: const []);
+    translator.update({
+      'sessionUpdate': 'tool_call',
+      'toolCallId': 'call-1',
+      'title': 'web_fetch',
+      'status': 'in_progress',
+      'rawInput': {'url': 'https://example.com'},
     });
 
     final item = [
@@ -274,7 +471,13 @@ void main() {
     ].whereType<ToolCallItem>().single;
     expect(
       (item.kind, item.tool, item.target, item.label, item.detail),
-      (ToolKind.command, null, 'read', 'read', 'path: lib/main.dart'),
+      (
+        ToolKind.command,
+        null,
+        'web_fetch',
+        'web_fetch',
+        'url: https://example.com',
+      ),
     );
   });
 }

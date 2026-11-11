@@ -210,12 +210,20 @@ class DshTranslator {
         // the items are what the step shows, its line the one in progress
         // (see todoStep). A shell call (`bash`, `pwsh`) is the command card
         // Claude Code's Bash gets: its description on the line, the whole
-        // command one tap away. Every other call is a command (F9).
+        // command one tap away. A `read` call is Claude Code's Read: the
+        // file's name on the line, the whole path one tap away, the lines it
+        // read as its detail. A `send_message` call is Claude Code's
+        // SendMessage: what it says on the line, all of it one tap away.
+        // Every other call is a command (F9).
         final todo = title.trim().toLowerCase() == 'todo_write';
         final command = _isShell(title) ? _string(input['command']) : null;
         final shell = command == null || command.trim().isEmpty
             ? null
             : command;
+        final file = _isRead(title) ? _string(input['file_path']) : null;
+        final reading = file == null || file.trim().isEmpty ? null : file;
+        final text = _isMessage(title) ? _string(input['message']) : null;
+        final message = text == null || text.trim().isEmpty ? null : text;
         final detail = _oneLine(raw);
         final call = shell != null
             ? _ToolCall.shell(
@@ -223,6 +231,13 @@ class DshTranslator {
                 description: _string(input['description']),
                 background: input['run_in_background'] == true,
               )
+            : reading != null
+            ? _ToolCall.read(
+                path: reading,
+                detail: _lineRange(input['offset'], input['limit']),
+              )
+            : message != null
+            ? _ToolCall.message(message: message)
             : _ToolCall(
                 kind: todo ? ToolKind.todo : ToolKind.command,
                 tool: todo ? 'todo_write' : null,
@@ -342,6 +357,27 @@ class DshTranslator {
     _ => false,
   };
 
+  /// Whether [title] names the read tool: dsh calls it `read`.
+  static bool _isRead(String title) => title.trim().toLowerCase() == 'read';
+
+  /// The lines a read asked for (`L10-19`), from its 1-based [offset] and
+  /// [limit]; null unless both are given, as Claude Code's Read shows it.
+  static String? _lineRange(Object? offset, Object? limit) {
+    final first = _number(offset);
+    final count = _number(limit);
+    if (first == null || count == null) return null;
+    return 'L$first-${first + count - 1}';
+  }
+
+  /// [path]'s last part: the file's name, its directory left to the row's
+  /// tooltip and file link.
+  static String _baseName(String path) => path.split(RegExp(r'[/\\]')).last;
+
+  /// Whether [title] names the tool that messages another agent: dsh calls
+  /// it `send_message`.
+  static bool _isMessage(String title) =>
+      title.trim().toLowerCase() == 'send_message';
+
   /// [value] as text, when it is.
   static String? _string(Object? value) => value is String ? value : null;
 
@@ -380,8 +416,8 @@ class DshTranslator {
 }
 
 /// A tool call as first seen, kept to show it again when its update arrives:
-/// that one names only its id (F9), and what a shell or todo step shows is in
-/// the call's own input.
+/// that one names only its id (F9), and what a shell, read, message or todo
+/// step shows is in the call's own input.
 class _ToolCall {
   const _ToolCall({
     required this.kind,
@@ -392,7 +428,9 @@ class _ToolCall {
     this.detail,
   }) : command = null,
        description = null,
-       background = false;
+       background = false,
+       path = null,
+       message = null;
 
   /// A shell call, shown as a command card ([TerminalItem]) rather than a
   /// step: its [description] on the line, the whole [command] in the body.
@@ -405,7 +443,37 @@ class _ToolCall {
        tool = null,
        input = const {},
        label = null,
-       detail = null;
+       detail = null,
+       path = null,
+       message = null;
+
+  /// A read call, shown as the read step Claude Code's Read gets: the file's
+  /// name on the line, the whole [path] one tap away, [detail] the lines it
+  /// read.
+  const _ToolCall.read({required this.path, this.detail})
+    : kind = ToolKind.read,
+      target = '',
+      tool = null,
+      input = const {},
+      label = null,
+      command = null,
+      description = null,
+      background = false,
+      message = null;
+
+  /// A message to another agent, shown as Claude Code's SendMessage is: what
+  /// it says on the line, all of it one tap away.
+  const _ToolCall.message({required this.message})
+    : kind = ToolKind.message,
+      target = '',
+      tool = null,
+      input = const {},
+      label = null,
+      detail = null,
+      command = null,
+      description = null,
+      background = false,
+      path = null;
 
   final ToolKind kind;
   final String target;
@@ -419,6 +487,13 @@ class _ToolCall {
 
   final String? label;
   final String? detail;
+
+  /// A read call's file, whole: the row opens it and shows only its name.
+  final String? path;
+
+  /// A message call's text, whole: the line takes one line of it, the body
+  /// all of it.
+  final String? message;
 
   /// A shell call's command; null for another call.
   final String? command;
@@ -444,6 +519,30 @@ class _ToolCall {
           ToolStatus.failed || ToolStatus.denied => CommandStatus.failed,
         },
         background: background,
+      );
+    }
+    final path = this.path;
+    if (path != null) {
+      return ToolCallItem(
+        kind: ToolKind.read,
+        target: DshTranslator._baseName(path),
+        path: path,
+        detail: detail,
+        status: status,
+        // The file itself opens from the row: what it returned is kept only
+        // when it failed, as the reason.
+        output: status == ToolStatus.succeeded ? null : output,
+      );
+    }
+    final message = this.message;
+    if (message != null) {
+      return ToolCallItem(
+        kind: ToolKind.message,
+        target: DshTranslator._oneLine(message),
+        status: status,
+        // Delivered, all of it opens from the line; a failure keeps dsh's
+        // reason instead.
+        output: status == ToolStatus.failed ? output : message,
       );
     }
     return ToolCallItem(

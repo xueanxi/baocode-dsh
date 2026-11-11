@@ -208,8 +208,8 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 |---|---|
 | `agent_message_chunk` | `ItemUpserted('message:<n>', AssistantTextItem(text))`（整条，不流式） |
 | `agent_thought_chunk` | `ItemUpserted('thought:<n>', ThinkingItem(text))`；`seconds` 取与上一个 step 的间隔，第一段从本轮开始算（dsh 不计时） |
-| `tool_call` | `ItemUpserted(toolCallId, …)`：`title == todo_write` 时 `ToolCallItem(kind: todo, tool: "todo_write", input: rawInput, target: 进行中的那一项)`；`title` 为 `bash`/`pwsh` 时 `TerminalItem(command: rawInput.command, description: rawInput.description, background: rawInput.run_in_background)`（与 Claude Code 的 Bash 同一张命令卡）；其余 `ToolCallItem(kind: command, target: title, label: title, detail: <rawInput 单行摘要>, status: running)` |
-| `tool_call_update` | 同 id：按首次 `tool_call` 重建（todo 的清单、命令卡的命令与描述不靠 update）；`status: succeeded/failed`（命令卡为 `CommandStatus`），`output:` 拼 `content` 里的文本块；`kind` 恒 `other`，`ToolKind` 没有 other 成员，不为它加成员 |
+| `tool_call` | `ItemUpserted(toolCallId, …)`：`title == todo_write` 时 `ToolCallItem(kind: todo, tool: "todo_write", input: rawInput, target: 进行中的那一项)`；`title` 为 `bash`/`pwsh` 时 `TerminalItem(command: rawInput.command, description: rawInput.description, background: rawInput.run_in_background)`（与 Claude Code 的 Bash 同一张命令卡）；`title == read` 时 `ToolCallItem(kind: read, target: 文件名, path: rawInput.file_path, detail: offset 与 limit 都给时为 L<起>-<止>)`（与 Claude Code 的 Read 同一步；成功时不保留返回内容，失败才留作 output）；`title == send_message` 时 `ToolCallItem(kind: message, target: rawInput.message 单行, output: 送达后整条 message，失败时为返回错误)`（与 Claude Code 的 SendMessage 同一步）；其余 `ToolCallItem(kind: command, target: title, label: title, detail: <rawInput 单行摘要>, status: running)` |
+| `tool_call_update` | 同 id：按首次 `tool_call` 重建（todo 的清单、命令卡的命令与描述、read 的文件与行范围、message 的正文不靠 update）；`status: succeeded/failed`（命令卡为 `CommandStatus`），`output:` 拼 `content` 里的文本块；`kind` 恒 `other`，`ToolKind` 没有 other 成员，不为它加成员 |
 | `usage_update` | `UsageReported(ContextUsage(window: size, used: used))`，并记下 size |
 | `config_option_update` | 重建选项 + `emitInfoChanged()` |
 | `session/prompt` 的 `{stopReason}` | `TurnEnded(turnId)`；`cancelled` → `interrupted: true` |
