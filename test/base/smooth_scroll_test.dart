@@ -6,6 +6,19 @@ import 'package:baocode/base/smooth_scroll.dart';
 
 const _frame = Duration(microseconds: 16667);
 
+/// A view's display, as when the engine has none for it (a screen gone, a
+/// lock, a window moved): asking the refresh rate, as asking
+/// [FlutterView.display] does, throws the null check the field logged.
+class _NoDisplayFrames extends TestDisplay {
+  _NoDisplayFrames(super.platformDispatcher, super.display);
+
+  @override
+  double get refreshRate {
+    double? rate;
+    return rate!;
+  }
+}
+
 /// Two lists of 100 rows 40 high side by side, each with a controller of
 /// its own ([SmoothScrolling]); the left one's handed to [left].
 Future<void> _lists(
@@ -201,5 +214,48 @@ void main() {
     expect(shown.offset, 0);
     await show('a');
     expect(shown.offset, 300);
+  });
+
+  testWidgets('a wheel notch still scrolls a list whose view has no display '
+      'to ask for a frame of: the wheel is not left dead', (tester) async {
+    // A view the engine keeps drawing, on a display it can no longer name
+    // (a screen gone, a lock, one moved): this is the state the field's
+    // `Null check operator used on a null value` was thrown in.
+    final dispatcher = tester.binding.platformDispatcher;
+    final view = TestFlutterView(
+      view: tester.view,
+      platformDispatcher: dispatcher,
+      display: _NoDisplayFrames(dispatcher, tester.view.display),
+    );
+    late ScrollController controller;
+    await tester.pumpWidget(
+      View(
+        view: view,
+        child: MaterialApp(
+          home: SmoothScrolling(
+            builder: (context, shown) => ListView.builder(
+              controller: controller = shown,
+              itemCount: 100,
+              itemExtent: 40,
+              itemBuilder: (context, index) => Text('Row $index'),
+            ),
+          ),
+        ),
+      ),
+      wrapWithView: false,
+    );
+    final at = tester.getCenter(find.byType(ListView));
+
+    await _wheel(tester, at, 120);
+    await tester.pump(_frame);
+    expect(controller.offset, greaterThan(0));
+    await tester.pump(WheelGlide.duration);
+    expect(controller.offset, 120);
+
+    // The next notch too: it was not one bad event.
+    await _wheel(tester, at, 120);
+    await tester.pump(_frame);
+    await tester.pump(WheelGlide.duration);
+    expect(controller.offset, 240);
   });
 }

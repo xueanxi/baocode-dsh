@@ -94,13 +94,33 @@ class WheelGlide {
 
   /// A frame of the display [context] is on (144 a second, say); of one at
   /// 60 a second where that is not known.
+  ///
+  /// A view can be between displays: a screen switched off or gone, a window
+  /// moved, the lock screen, a remote session. Its [FlutterView.display] has
+  /// no display to give the engine then (the lookup throws), and a wheel
+  /// event that asks has to go on scrolling, not stop every wheel there is:
+  /// the view's frames last seen are taken, or 60 a second.
   static Duration frameOf(BuildContext? context) {
-    final rate = context == null
-        ? null
-        : View.maybeOf(context)?.display.refreshRate;
+    final view = context == null ? null : View.maybeOf(context);
+    double? rate;
+    if (view != null) {
+      try {
+        rate = view.display.refreshRate;
+      } on Object {
+        // Asking a view with no display must not throw in a wheel event:
+        // the pointer signal resolver reports it and nothing scrolls, for
+        // every notch after it too.
+        rate = _rates[view.viewId];
+      }
+      if (rate != null && rate >= 24) _rates[view.viewId] = rate;
+    }
     if (rate == null || rate < 24) return const Duration(microseconds: 16667);
     return Duration(microseconds: (1e6 / rate).round());
   }
+
+  /// The last frame length seen for each view, for a while its display
+  /// cannot be asked.
+  static final Map<int, double> _rates = {};
 }
 
 /// Glides a view either way as a mouse wheel's notches come ([WheelGlide]),
