@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:baocode/chat/chat_models.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_ask_bridge.dart';
+import 'package:baocode/kernel/dsh/dsh_edit_bridge.dart';
 import 'package:baocode/kernel/dsh/dsh_kernel.dart';
 import 'package:baocode/kernel/dsh/dsh_locate.dart';
 import 'package:baocode/kernel/dsh/dsh_notices.dart';
@@ -87,6 +88,9 @@ void main() {
       expect(patch, contains(DshAskBridge.fileName));
       expect(patch, contains('- id: baocode-usage-bridge'));
       expect(patch, contains(DshUsageBridge.fileName));
+      // Going back is a plugin too: ACP has no rewind.
+      expect(patch, contains('- id: baocode-edit-bridge'));
+      expect(patch, contains(DshEditBridge.fileName));
     },
   );
 
@@ -871,6 +875,38 @@ nonsense=1
       expect(_item(events, 'notice:images:turn-2').item, isA<NoticeItem>());
     },
   );
+
+  test('an edit goes back by the prompt after it: markers count the turns, and '
+      'the message shown carries none', () async {
+    final dsh = _FakeDsh();
+    final kernel = dsh.kernel();
+    final events = _listen(kernel);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+    expect(kernel, isA<RewindsConversation>());
+
+    for (final (id, text) in [('turn-1', 'one'), ('turn-2', 'two')]) {
+      kernel.send(KernelTurn(id: id, text: text));
+      await settled(
+        () => events.whereType<TurnEnded>().length == (id == 'turn-1' ? 1 : 2),
+      );
+    }
+
+    // Two turns from the edited one to the end: the prompt that goes next
+    // says so, and the app goes back at once.
+    expect(await kernel.rewind(itemId: 'turn-1', index: 0, turns: 2), isTrue);
+    expect(events.whereType<Rewound>().single.itemId, 'turn-1');
+
+    kernel.send(const KernelTurn(id: 'turn-3', text: 'ONE'));
+    await settled(() => events.whereType<TurnEnded>().length == 3);
+
+    final prompt = dsh.transport.lastPrompt!['prompt'] as List;
+    final text = (prompt.single as Map)['text'] as String;
+    expect(text, '${DshEditBridge.marker * 2}ONE');
+    // What the thread shows is the text the user typed: the markers are
+    // between the kernel and dsh, not in the conversation.
+    expect((_item(events, 'turn-3').item as UserMessageItem).text, 'ONE');
+  });
 
   test('disposed: let go, and `stopped` completes once it is gone', () async {
     final dsh = _FakeDsh();

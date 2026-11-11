@@ -147,6 +147,15 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 
 没有人在电脑前的会话（`KernelWorkspace.approvesAll`，bot 的）**不插**这两行；端点起不来时同样不插。两种情况 agent 都退回文字提问，其余照常。
 
+## 4.2 编辑用户消息（会话内 rewind）
+
+点用户气泡就能改这条指令并重发，和 Claude Code 一样。ACP 没有 rewind，所以分两半：
+
+- **内核**（`DshKernel` 实现 `RewindsConversation`）：`rewind` 只清队列、记下要丢掉几轮、发 `Rewound`；随后的新消息就是载体。
+- **插件**（补丁 `insert` 的 `baocode-edit-bridge`，`edit_bridge.mjs`）：内核在 prompt 文本前加“要丢几轮”那么多对零宽标记（`\u200B\u200C`）。插件用 agent loop 的两个钩子，都在本 step 组请求之前：`agent/pre-step` 去掉标记（保留 message id，ACP 还等着它做模型选择关联）并记下要丢几轮；`agent/request` 时 `step/start` 已提交、本 step 的 prompt 还没进历史，插件从旧的用户 prompt 倒数定位目标，用空 `developer/message` 对旧尾部做一次 surface replace。空 developer 消息不投影给模型，所以模型历史就是编辑后的历史，dsh 的 session id 不变、日志也不删。
+
+为什么这样做：dsh 的会话日志 append-only，surface replace 本来就是 compaction 用的机制；`session/fork` 不在 ACP 里，换 session id 还要搬 BaoCode 的账本。排队的消息不算 turn（它没进 dsh），`rewind` 时内核队列清空。插件没写成时 `rewind` 返回 false 并发一条 error 提示，不会把旧上下文硬接在后面。
+
 ## 5. 已知限制
 
 以下每条都对应规格 §9 与事实表，接受它们再用这个内核：
@@ -165,7 +174,7 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 8. **跨内核的“上次选择”按 kind 全局保存**：不同内核共用一份按 kind（model/effort/permission）记的选择；DSH 会丢弃它不认识的 id（例如 Claude 的 model id），所以切内核后可能要重选档位/模型。
 9. **用量进 BaoCode 的账本**：`usage_update` 只用来刷新工具栏的上下文占用与窗口大小；每次模型调用的 **tokens** 由补丁挂的 `baocode-usage-bridge` 从 dsh 的 `assistant/message` 事件取出，经本机端点记入设置→用量，数值与供应商报的一致。金额是估算：本机路由的 model 没在设置→用量里设价时，若它在内置估算表里（目前是 `deepseek-v4.1-flash`）就用 DeepSeek 公开价，否则仍显示未定价；设了价就用你的。dsh 仍不声明 `ReportsUsage`（那是账号额度，不是每笔调用）。
 10. **切视图回来要重新握手（约 6 秒）**：视图全关时内核释放进程，下次进入重新定位、起进程、`initialize`，再 `session/resume`。这 6 秒是 dsh 的启动时间（F20），不是卡死。
-11. 其他不做的：token 级流式、会话内切换档位、fork/rewind/重命名/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1）。
+11. 其他不做的：token 级流式、会话内切换档位、fork/重命名/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1；编辑用户消息同理，见 §4.2）。
 12. 本设计的补丁只声明 `model`，没有声明 `reasoningEffort`（F6）：dsh 不报 `reasoning_effort`，所以思考强度选择器不显示（内核实现了 `SelectsEffort`，选项为空时 UI 自然不显示）。
 13. 上下文窗口在 dsh 报告前按路由文件的 `context_window` 显示（没写或没有路由文件时用 `DshRoute.defaultContextWindow`，200000），`usage_update.size` 到达后覆盖。
 14. 版本低于 `0.2.0-rc.2` 时只发一条 warning（每个会话一次），不阻止使用；`unknown` 版本不做比较、不提醒。
@@ -431,6 +440,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 | `lib/kernel/dsh/dsh_usage_server.dart`、`dsh_usage_server_io.dart`、`dsh_usage_server_stub.dart` | 本机 loopback 用量端点：token、`POST /usage`，把报告交给内核 |
 | `lib/kernel/dsh/dsh_usage_bridge.dart` | 写 `usage_bridge.mjs`（监听 dsh 的 `assistant/message`，把供应商 tokens POST 到上面的端点），返回补丁用的 `file://` URL |
 | `lib/kernel/dsh/dsh_usage_meter.dart` | 把一份用量报告变成 `UsageCall`：精确 tokens、时长、主/子代理归属 |
+| `lib/kernel/dsh/dsh_edit_bridge.dart` | 写 `edit_bridge.mjs`（`agent/pre-step` 清标记、`agent/request` 用 surface replace 隐藏编辑点之后的历史），返回补丁用的 `file://` URL |
 | `lib/kernel/dsh/dsh_notices.dart` | 会话内提示（版本、凭据、图片）与按 ref 的凭据预检 |
 | `lib/kernel/dsh/dsh_path_setting.dart` | `dshCode.path` 的解析与 `current` 缝 |
 | `lib/kernel/dsh/mock_dsh_transport.dart` | 测试用的脚本化 dsh 进程 |
@@ -442,11 +452,12 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 测试：
 
 - `test/kernel/dsh/`（`locate_test.dart`、`route_test.dart`、`patch_test.dart`、`transport_test.dart`、`ask_test.dart`、`skills_test.dart`）：定位（含开头的 `~` 展开）、路由文件的解析与定位、补丁（ACP 与一次性问答两份）、传输与问答的纯函数和临时目录测试、stderr 脱敏，以及 skill 的 frontmatter、项目根与 rank 合并；
-- `test/kernel/dsh_kernel_test.dart`：握手、会话时机、模型、健康、权限锁定、release/resume、能力随进程复位、`prepare()` 后 `/` 菜单来自 skill 根并带文件路径；
+- `test/kernel/dsh_kernel_test.dart`：握手、会话时机、模型、健康、权限锁定、release/resume、能力随进程复位、`prepare()` 后 `/` 菜单来自 skill 根并带文件路径、编辑时的标记与界面文本；
 - `test/kernel/dsh_turn_test.dart`：一轮的事件顺序（含带图时提示在同一轮内、握手前发图等握手）、文本、思考、工具、usage、错误、取消；
 - `test/kernel/dsh_approval_test.dart`：审批的挂起、三种应答线形、理由回退、迟到应答；
 - `test/kernel/dsh_question_server_test.dart`：桥插件文件的写入与不重写、端点的 token 校验、未知问题 404；
 - `test/kernel/dsh_usage_server_test.dart`：usage 插件文件的写入与不重写、端点的 token 校验、用量报告解码；`dsh_kernel_test.dart` 追加精确 tokens、时长、子代理归属与无 token 不记；
+- `test/kernel/dsh_edit_bridge_test.dart`：rewind 插件文件的写入与不重写、surface replace/清标记/只认用户 prompt 的源文本检查；
 - `test/kernel/dsh_kernel_test.dart`（追加）：问题走面板、回答的 `selected`/`custom`、跳过、release 时 `cancelled`、无人在场时不插桥；
 - `test/e2e_dsh_real_test.dart`：`-t dsh-e2e` 才跑，真 dsh 调 `ask_user_question`，自动替用户答 Apple，断言工具结果与回复；
 - `test/kernel/dsh_integration_test.dart`：跨票回归，prepare → 首条消息建会话 → 工具+审批 → 下一轮 → 出错轮 → release → prepare/resume → dispose；

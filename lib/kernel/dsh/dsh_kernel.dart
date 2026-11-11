@@ -16,6 +16,7 @@ import '../transcript.dart';
 import 'dsh_approval.dart';
 import 'dsh_ask_bridge.dart';
 import 'dsh_bash.dart';
+import 'dsh_edit_bridge.dart';
 import 'dsh_locate.dart';
 import 'dsh_notices.dart';
 import 'dsh_patch.dart';
@@ -66,7 +67,8 @@ class DshKernel
         ProvidesCommands,
         ReportsContext,
         AcceptsImages,
-        QueuesMessages {
+        QueuesMessages,
+        RewindsConversation {
   DshKernel(
     this.descriptor,
     this._context, {
@@ -224,6 +226,19 @@ class DshKernel
   /// (F12): they wait here, the next first, until the turn ends. dsh has no
   /// queue of its own to hand them to.
   final Map<String, KernelTurn> _queued = {};
+
+  /// How many turns a rewind drops, waiting for the prompt that carries it:
+  /// null between one edit and its message.
+  int? _rewindTurns;
+
+  /// The prompts that carry a rewind, by turn id: how many
+  /// [DshEditBridge.marker]s go before their text. Set when the turn is
+  /// made, kept until its prompt is written (a queued one may wait a turn).
+  final Map<String, int> _rewindMarks = {};
+
+  /// Whether the rewind plugin was written for this run: without it, an
+  /// edit cannot land, and none is sent.
+  bool _editBridge = false;
 
   /// The last lines dsh printed on stderr, kept for a failure's detail.
   String _stderr = '';
@@ -549,6 +564,16 @@ class DshKernel
           route?.contextWindow ?? DshRoute.defaultContextWindow;
       final bridge = await _openAskBridge();
       final usage = await _openUsageBridge();
+      // The rewind plugin takes no endpoint and no secret: a file, named by
+      // the patch. Without one an edit is turned down rather than sent as a
+      // message dsh cannot go back before.
+      String? editBridge;
+      try {
+        editBridge = await DshEditBridge.ensure(DataDirectory.current.dshDir);
+      } on Object catch (error) {
+        debugPrint('DSH rewind: $error');
+      }
+      _editBridge = editBridge != null;
       patchFile = await DshPatch.ensure(
         install: install,
         directory: DataDirectory.current.dshDir,
@@ -556,6 +581,7 @@ class DshKernel
         withBash: await findGitBash(environment: environment) != null,
         askBridge: bridge?.plugin,
         usageBridge: usage?.plugin,
+        editBridge: editBridge,
         dshHome: _dshHomeOf(environment),
       );
       final launched = {...environment};
@@ -744,6 +770,13 @@ class DshKernel
     // One sent twice runs once, queued or not.
     if (_sentTurns.contains(turn.id)) return;
     _sentTurns.add(turn.id);
+    // A rewind is carried by the message it goes back for: dsh has no call
+    // for one, so the prompt says how many turns to drop (see
+    // `dsh_edit_bridge.dart`). Kept with the turn: it may wait queued.
+    if (_rewindTurns case final turns?) {
+      _rewindTurns = null;
+      _rewindMarks[turn.id] = turns;
+    }
     // Its first message names the session, as it names a new agent's in
     // the sidebar: kept for the next run, where dsh names no title (F17).
     if (_title.isEmpty) _title = _titleOf(turn.text);
@@ -849,7 +882,11 @@ class DshKernel
     if (_translator.turnId != turn.id) return;
     final sent = _prompt({
       'sessionId': _sessionId,
-      'prompt': _promptContent(turn.text, images),
+      'prompt': _promptContent(
+        turn.text,
+        images,
+        marks: _rewindMarks.remove(turn.id) ?? 0,
+      ),
     });
     if (!sent) {
       // The process went as the message was to be sent: the turn ends here,
@@ -860,11 +897,16 @@ class DshKernel
   }
 
   /// What the message is to dsh: its pictures, then its text. The turn's
-  /// `notes` are not sent: dsh has no channel for them (§5.10).
+  /// `notes` are not sent: dsh has no channel for them (§5.10). [marks] is
+  /// how many turns the prompt goes back for: that many
+  /// [DshEditBridge.marker]s go before the text, for the plugin to count and
+  /// strip (`dsh_edit_bridge.dart`).
   static List<Map<String, Object?>> _promptContent(
     String text,
-    List<ImageAttachment> images,
-  ) {
+    List<ImageAttachment> images, {
+    int marks = 0,
+  }) {
+    final marked = marks > 0 ? '${DshEditBridge.marker * marks}$text' : text;
     final blocks = [
       for (final image in images)
         {
@@ -872,7 +914,7 @@ class DshKernel
           'data': base64Encode(image.bytes),
           'mimeType': image.mediaType,
         },
-      if (text.isNotEmpty) {'type': 'text', 'text': text},
+      if (marked.isNotEmpty) {'type': 'text', 'text': marked},
     ];
     return blocks.isEmpty
         ? [
@@ -947,6 +989,7 @@ class DshKernel
   @override
   Future<bool> cancelQueued(String turnId) async {
     if (_queued.remove(turnId) == null) return false;
+    _rewindMarks.remove(turnId);
     emit(ItemRemoved(nextSeq, turnId));
     return true;
   }
@@ -1010,6 +1053,49 @@ class DshKernel
     // Nothing at dsh yet (the session is still being made): it ends here.
     _translator.end(interrupted: true);
     _settleTurn();
+  }
+
+  /// Goes back to [itemId], by declaring it on the next prompt: dsh's ACP
+  /// has no rewind call, so the message that is sent next carries how many
+  /// turns to drop, and the plugin (`dsh_edit_bridge.dart`) hides them from
+  /// the model's surface before that prompt's request is built.
+  ///
+  /// It answers true as soon as the next prompt can carry it: nothing is
+  /// sent here, and the message itself goes in [send]. The turn running is
+  /// stopped by the caller first; one still stopping leaves the message
+  /// queued, markers and all.
+  @override
+  Future<bool> rewind({
+    required String itemId,
+    required int index,
+    required int turns,
+    String? lastSeen,
+  }) async {
+    String? why() => switch ((_editBridge, _sessionId, turns)) {
+      (false, _, _) => "DSH's rewind plugin is missing",
+      (_, null, _) => 'DSH has no session yet',
+      (_, _, <= 0) => 'there is no turn to go back to',
+      _ => null,
+    };
+    if (why() case final reason?) {
+      emit(
+        ItemUpserted(
+          nextSeq,
+          'rewind:$itemId',
+          NoticeItem(NoticeKind.error, 'Could not edit: $reason.'),
+        ),
+      );
+      return false;
+    }
+    // The messages after the edited one are not sent: they were shown as
+    // waiting, and the conversation goes back past them.
+    for (final id in _queued.keys) {
+      _rewindMarks.remove(id);
+    }
+    _queued.clear();
+    _rewindTurns = turns;
+    emit(Rewound(nextSeq, itemId: itemId, index: index));
+    return true;
   }
 
   /// What the user answered to [requestId]: dsh's asks are approvals and its

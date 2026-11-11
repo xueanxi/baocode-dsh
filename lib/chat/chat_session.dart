@@ -1230,9 +1230,14 @@ class ChatSession extends ChangeNotifier implements ChatFeed {
       var turns = 0;
       String? lastSeen;
       for (var i = index; i < _transcript.length; i++) {
-        if (_transcript.itemAt(i) case UserMessageItem(:final queued)) {
+        // Only a message the agent was sent is a turn of its conversation: a
+        // queued one waits in the app, and a subagent's is not this
+        // conversation's.
+        if (_transcript.itemAt(i)
+            case UserMessageItem(:final queued, :final fromAgent)
+            when !queued && fromAgent == null) {
           turns++;
-          if (!queued) lastSeen = _transcript.idAt(i) ?? lastSeen;
+          lastSeen = _transcript.idAt(i) ?? lastSeen;
         }
       }
       // Sent once the agent has gone back: turned down, it would follow

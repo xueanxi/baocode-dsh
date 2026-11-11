@@ -1,5 +1,7 @@
+import 'package:baocode/chat/chat_models.dart';
 import 'package:baocode/chat/chat_session.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
+import 'package:baocode/kernel/dsh/dsh_edit_bridge.dart';
 import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
 import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:baocode/kernel/mock/mock_kernels.dart';
@@ -126,6 +128,50 @@ void main() {
     });
   });
 
+  group('editing a message', () {
+    test('counts only the turns dsh was sent, not one still queued', () async {
+      final transport = MockDshTransport();
+      final session = ChatSession(
+        kernel: MockKernels.dshOn(transport),
+        historyCount: 0,
+      );
+      addTearDown(session.dispose);
+      session.attach();
+      expect(session.canEditMessages, isTrue);
+
+      for (final text in ['first', 'second']) {
+        session.send(ComposerMessage(text: text));
+        await _awaitWhere(() => session.isStreaming, 'the $text turn');
+        await _awaitWhere(() => !session.isStreaming, 'the $text turn to end');
+      }
+      // A turn under way, and a message waiting over it: that one is not in
+      // dsh's conversation yet, so the edit must not drop it as a turn.
+      transport.paused = true;
+      session.send(const ComposerMessage(text: 'third'));
+      await _awaitWhere(() => transport.isPaused, 'the third turn held');
+      session.send(const ComposerMessage(text: 'fourth'));
+      expect(session.queued, hasLength(1));
+
+      session.editMessage(0, const ComposerMessage(text: 'FIRST'));
+      await _awaitWhere(
+        () => _promptText(transport).startsWith(DshEditBridge.marker),
+        'the edit sent',
+      );
+
+      // first, second and third were dsh's; fourth was only the app's.
+      expect(_promptText(transport), '${DshEditBridge.marker * 3}FIRST');
+      // What dsh is sent is the edit; what the thread shows is the user's
+      // words, with no markers and none of the turns after it.
+      expect(
+        [
+          for (var i = 0; i < session.itemCount; i++)
+            if (session.itemAt(i) case UserMessageItem(:final text)) text,
+        ],
+        ['FIRST'],
+      );
+    });
+  });
+
   group('pictures', () {
     test('are taken by the kernels that take them on every route', () {
       final claude = ChatSession(
@@ -213,6 +259,18 @@ Workspace _workspace(KernelDescriptor kernel, List<String> asked) => Workspace(
     return 'A new title';
   },
 );
+
+/// The text of the last prompt [transport] was sent, markers and all.
+String _promptText(MockDshTransport transport) {
+  final prompt = transport.lastPrompt?['prompt'];
+  if (prompt is! List) return '';
+  for (final block in prompt) {
+    if (block is Map && block['type'] == 'text' && block['text'] is String) {
+      return block['text'] as String;
+    }
+  }
+  return '';
+}
 
 /// Waits for [session]'s kernel to have started and its turn to be over: the
 /// one message it was sent, answered by a mock process at once.

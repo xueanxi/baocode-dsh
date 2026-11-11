@@ -114,8 +114,8 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 
 ### 5.2 能力声明
 
-声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ProvidesCommands`、`ReportsContext`、`AcceptsImages`、`QueuesMessages`；描述符带 `catalog: DshCatalog`（见 §5.13）。
-不声明：`LoadsHistory`、fork、rewind、重命名、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
+声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ProvidesCommands`、`ReportsContext`、`AcceptsImages`、`QueuesMessages`、`RewindsConversation`；描述符带 `catalog: DshCatalog`（见 §5.13）。
+不声明：`LoadsHistory`、fork、重命名、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
 
 要点：
 
@@ -125,6 +125,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 - `SelectsPermission` 是内核自己的 `_Choice` 实现（不用 `LocalChoice`，因为 `LocalChoice.select` 会立刻改 `selected`）：首条消息之前三档可选，之后 `options` 只保留当前项（选择器自然只剩一项）。
 - `QueuesMessages` 是**适配器自己的队列**，不是 dsh 的能力：dsh 一次只收一个 prompt（F12），所以工作中发来的消息由内核先收下，当前轮结束后再依次发出（§5.17）。
 - `ReportsUsage` 是账号额度，不是每笔调用的令牌：后者由补丁挂的 `baocode-usage-bridge` 从 dsh 的 `assistant/message` 事件取 `usage`，经本机端点记入用量账本（§5.18）。
+- `RewindsConversation` 不是 ACP 的能力：`rewind` 只在本地记下“要回到第几条”，把要丢弃的轮数编码进**下一条 prompt**。补丁挂的 `baocode-edit-bridge` 是 dsh 的 agent 插件，在 `agent/pre-step` 去掉标记、在 `agent/request` 用空的 `developer/message` 覆写旧尾部（surface replace，投影不出模型消息）；于是同一条 dsh 会话、同一个 session id，模型看到的历史就是编辑后的历史（§5.19）。
 
 ### 5.3 启动、定位与 profile
 
@@ -347,6 +348,20 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - **重复与历史**：dsh 的 `session/event` 不重放 seed 事件，resume 不会把旧调用再记一遍；每条 `assistant/message` 只提交一次，插件也只报一次。只从装了 usage 桥的进程开始记：修复前的 DSH 调用**不回填**。
 - **测试**：`dsh_usage_server_test.dart`（插件文件、token、报告解码）、`dsh_kernel_test.dart`（精确 tokens、时长、子代理归属、无 token 不记）、`dsh/patch_test.dart`（usage-only insert）。
 
+### 5.19 编辑用户消息（会话内 rewind）
+
+目标：点用户气泡能改这条指令并重发，行为与 Claude Code 一致（用户故事：会话内编辑）。ACP 没有 rewind / fork / `session/load`，所以不能靠协议调用。
+
+- **接口**：`DshKernel` 实现 `RewindsConversation`。`rewind` 不发任何请求，只清掉本地队列、记下 `turns`、发 `Rewound(itemId, index)`；调用方随后 `send` 的新消息就是这条 rewind 的载体。没有插件（`_editBridge` 为 false）时返回 false 并发一条 error 走马灯，不发消息。
+- **载体**：`_promptContent` 在文本前加 `turns` 个 `DshEditBridge.marker`（`\u200B\u200C`，每轮一对）。翻译层仍用原文，所以界面上看不到标记；标记只在进程内写到 dsh 的 prompt 里。轮次可能排队，所以标记按 turn id 保存，真正发出时才取。
+- **插件**：补丁 `insert` `baocode-edit-bridge`（`edit_bridge.mjs`，`file://` 绝对 URL，无需端点与 token）。它不监听 `session/event`（dsh 正在发布事件时再 append 会被拒），而是用 agent loop 的两个钩子，且都在本 step 组请求之前：
+  - `agent/pre-step`：拿到被 claim 的 prompt，数出开头 N 对标记，去掉标记（**保留 message id**，ACP 还等着它做模型选择关联），并按 session 记下“这一 turn/step 要丢 N 轮”；
+  - `agent/request`：此时 `step/start` 已提交、本 step 的 system prompt 与 prompt 还没进历史。插件从**可见的**用户 prompt 里倒数第 N 条定位编辑目标，用 `developer/message`（`content: []`）对 old tail 做一次 surface replace；范围终点是当前 `turn/start` 之前的最后一个 surface 节点。`sourceEventSeqs` 带上被覆写的全部 surface 节点，满足 dsh 的 surface 校验。
+  - 随后 loop 正常追加本 step 的 system prompt 和**已去标记**的 prompt。空 `developer/message` 不投影模型消息，所以模型历史是：旧前缀 + 本轮 system prompt + 干净的新 prompt。替换发生在 `buildRequest` 之前，`contentGeneration` 的变化也会让本 step 正确地开新 message series。
+- **为什么不用 `session/fork`**：ACP 不暴露 fork；即使 fork，session id 会变，BaoCode 的会话账本与后续 `session/resume` 都要搬家。surface replace 留在同一会话内，也不删 dsh 的日志。
+- **排队的消息**：`ChatSession.editMessage` 只把**真正发出去过**的用户消息算作 turn（排队中的、子代理的都不算），否则会多丢 dsh 里的轮次。rewind 时内核自己的 `_queued` 清空，界面的 `Rewound` 截断之后的条目。
+- **测试**：`dsh_kernel_test.dart`（`RewindsConversation`、标记数量、界面文本无标记）、`dsh_edit_bridge_test.dart`（插件文件、replace/清标记逻辑）、`dsh/patch_test.dart`（edit-only insert）。
+
 ## 6. Testing Decisions
 
 缝的形状（评审修正后）：**以构造函数注入传输工厂为主缝**，其余都是既有测试惯例，不新增抽象：
@@ -400,7 +415,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - 列出 dsh web 里开始的会话；用 dsh 的 `session/delete` 真删会话（本版本 ACP 没有 delete，BaoCode 的删除只删本地账本）
 - token 级流式文本
 - 会话内切换权限档位（dsh 不支持改已建会话的档位）
-- fork / rewind / 重命名 / 后台任务 / MCP 管理 / 计划模式
+- fork / 重命名 / 后台任务 / MCP 管理 / 计划模式（编辑用户消息见 §5.19：用 surface replace，不是 fork/rewind 协议）
 - 把工作中发送的消息插进当前轮（`chat.queuedMessages` 的 `duringTurn`）：ACP 一次只收一个 prompt，DSH 恒为当前轮结束后再发
 - 编辑监听与 diff review
 - 远端 SSH 主机上的 dsh、多文件夹工作区里的 dsh
@@ -425,6 +440,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 12. `/` 菜单只读 dsh 的默认 skill 根：不读 `customSkillDirs`，对话开着时不热更新，下次 `prepare()` 才重读。
 13. 选项提问依赖 dsh 的内部接缝（`user-questions/request`、`dsh-tool-ask-user`），验证于 0.2.0-rc.2；dsh 改事件名/包名时工具会静默缺失。桥插件与端点只在本地，不走网络；dsh 自己跑的 shell 能读到环境里的 token，属于本机开发工具的威胁模型。
 14. 工作中发送的消息只能在**当前轮结束后**依次发出：ACP 一次只收一个 prompt；设置里的“插入当前任务”对 DSH 不生效。
+15. 编辑用户消息靠 dsh 的 surface replace，不是真删日志：旧事件仍在 `~/.dsh` 里（人能读，模型看不到）；插件没写成时内核不会发这条编辑；插件在但替换失败时，界面已截断而 dsh 保留旧上下文，标记在 `agent/pre-step` 已去掉、不会进模型，也不会报错。
 
 ## 10. Further Notes
 

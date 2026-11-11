@@ -167,6 +167,32 @@ void main() {
     );
   });
 
+  test('the rewind plugin is inserted on its own', () {
+    const bridge =
+        'file:///C:/Users/me/AppData/Roaming/BaoCode/dsh/edit_bridge.mjs';
+    final edit = DshPatch.content(version: '0.2.0-rc.2', editBridge: bridge);
+    expect(edit, contains('- insert:'));
+    expect(edit, contains('    - id: baocode-edit-bridge'));
+    expect(edit, contains("      name: '$bridge'"));
+    // Nothing else comes with a rewind: no question, no usage report.
+    expect(edit, isNot(contains('baocode-ask')));
+    expect(edit, isNot(contains('baocode-usage-bridge')));
+
+    final all = DshPatch.content(
+      version: '0.2.0-rc.2',
+      askBridge: 'file:///tmp/ask_bridge.mjs',
+      usageBridge: 'file:///tmp/usage_bridge.mjs',
+      editBridge: bridge,
+    );
+    expect(
+      all.indexOf('baocode-usage-bridge'),
+      lessThan(all.indexOf('baocode-edit-bridge')),
+    );
+
+    final without = DshPatch.content(version: '0.2.0-rc.2');
+    expect(without, isNot(contains('baocode-edit-bridge')));
+  });
+
   test(
     'the one question runs headless on the same route, in its own folder',
     () {
