@@ -4,16 +4,24 @@ import 'package:bao_remote/files.dart'
     show IdeFileExistsException, IdeFileNotFoundException;
 import 'package:path/path.dart' as p;
 
+import '../kernel/dsh/dsh_skills.dart';
 import 'customization_disk.dart';
+import 'customization_environment.dart';
 import 'customizations.dart';
 
-/// Claude Code's customizations on a [CustomizationDisk] (this machine's,
-/// or a remote host's): the user's under its config folder (`~/.claude`
-/// unless moved), a project's under `<project>/.claude` and the project's
-/// root (CLAUDE.md, `.mcp.json`).
+/// An agent's customizations on a [CustomizationDisk] (this machine's, or a
+/// remote host's): Claude Code's, the user's under its config folder
+/// (`~/.claude` unless moved) and a project's under `<project>/.claude`;
+/// dsh's skills alone, in `$DSH_HOME/skills` (else `~/.dsh/skills`) and a
+/// project's `.dsh/skills`.
 class CustomizationStore {
-  CustomizationStore({this.configDir, this.homeDir, CustomizationDisk? disk})
-    : _disk = disk ?? CustomizationDisk.local;
+  CustomizationStore({
+    this.configDir,
+    this.homeDir,
+    this.agent = CustomizationAgent.claudeCode,
+    this.environment,
+    CustomizationDisk? disk,
+  }) : _disk = disk ?? CustomizationDisk.local;
 
   /// Claude Code's config folder; by default as the disk's finds it.
   final String? configDir;
@@ -22,7 +30,34 @@ class CustomizationStore {
   /// the default one; by default the disk's.
   final String? homeDir;
 
+  /// Whose customizations these are.
+  final CustomizationAgent agent;
+
+  /// The environment dsh would start with, where its `DSH_HOME` is read
+  /// from; the login shell's by default.
+  final Map<String, String>? environment;
+
   final CustomizationDisk? _disk;
+
+  /// The same store as another agent's, made once.
+  final Map<CustomizationAgent, CustomizationStore> _derived = {};
+
+  /// The same files, read as [agent]'s; this one where it already is.
+  CustomizationStore forAgent(CustomizationAgent agent) {
+    if (agent == this.agent) return this;
+    return _derived[agent] ??= CustomizationStore(
+      configDir: configDir,
+      homeDir: homeDir,
+      agent: agent,
+      environment: environment,
+      disk: _disk,
+    );
+  }
+
+  /// Whether the page shows [kind]: dsh has skills alone.
+  bool shows(CustomizationKind kind) =>
+      agent == CustomizationAgent.claudeCode ||
+      kind == CustomizationKind.skills;
 
   CustomizationDisk get _files =>
       _disk ?? (throw UnsupportedError('No files on the web'));
@@ -52,25 +87,68 @@ class CustomizationStore {
     return _paths.join(config, '.claude.json');
   }
 
+  /// Where [scope]'s [kind] files are: Claude Code's config folder or a
+  /// project's `.claude`; dsh's own home or a project's `.dsh`. Null where
+  /// there is none (no home, no project, a kind dsh does not keep).
+  Future<String?> _base(
+    CustomizationKind kind,
+    CustomizationScope scope, {
+    String? project,
+  }) async {
+    if (agent == CustomizationAgent.dsh) {
+      if (kind != CustomizationKind.skills) return null;
+      if (scope == CustomizationScope.user) return _dshHome();
+      return project == null ? null : _dshProjectBase(project);
+    }
+    if (scope == CustomizationScope.user) return config();
+    return project == null ? null : _paths.join(project, '.claude');
+  }
+
+  /// dsh's own folder: `$DSH_HOME`, else `~/.dsh`; null where no home is
+  /// known.
+  Future<String?> _dshHome() async {
+    final environment = this.environment ?? await customizationEnvironment();
+    if (DshSkills.home(environment) case final home?) return home;
+    final home = homeDir ?? await _files.homeDir();
+    return home == null || home.isEmpty ? null : _paths.join(home, '.dsh');
+  }
+
+  /// A project's `.dsh`, at the root dsh reads its skills from: the nearest
+  /// ancestor with `.git` where the files are this machine's.
+  String _dshProjectBase(String project) => _files.isLocal
+      ? _paths.dirname(DshSkills.projectSkillsRoot(project))
+      : _paths.join(project, '.dsh');
+
+  /// Where [scope]'s skills are, for [list].
+  Future<String?> _skillsRoot(
+    CustomizationScope scope, {
+    String? project,
+  }) async {
+    final base = await _base(CustomizationKind.skills, scope, project: project);
+    return base == null || base.isEmpty ? null : _paths.join(base, 'skills');
+  }
+
   /// Those of [kind], the user's and [project]'s (none of a project's when
   /// null), by scope then name.
   Future<List<Customization>> list(
     CustomizationKind kind, {
     String? project,
   }) async {
-    if (!supported) return const [];
-    final config = await this.config();
+    if (!supported || !shows(kind)) return const [];
+    // Skills have a folder of their own per agent; the rest are Claude
+    // Code's, read under its config folder.
+    final config = kind == CustomizationKind.skills ? '' : await this.config();
     final dotClaude = project == null ? null : _paths.join(project, '.claude');
     final items = switch (kind) {
       CustomizationKind.skills => [
         ...await _skills(
           CustomizationScope.user,
-          _paths.join(config, 'skills'),
+          await _skillsRoot(CustomizationScope.user),
         ),
-        if (dotClaude != null)
+        if (project != null)
           ...await _skills(
             CustomizationScope.project,
-            _paths.join(dotClaude, 'skills'),
+            await _skillsRoot(CustomizationScope.project, project: project),
           ),
       ],
       CustomizationKind.subagents => [
@@ -113,7 +191,7 @@ class CustomizationStore {
     });
   }
 
-  /// The file of the `/command` [name] as Claude Code lists it: a skill's
+  /// The file of the `/command` [name] as its agent lists it: a skill's
   /// SKILL.md or a command's markdown, the user's, [project]'s or a
   /// plugin's (`plugin:name`); null for none (one built in).
   Future<String?> commandFile(String name, {String? project}) async {
@@ -130,7 +208,10 @@ class CustomizationStore {
       project: project,
     )) {
       if (skill.name == name ||
-          _paths.basename(_paths.dirname(skill.path)) == name) {
+          _paths.basename(_paths.dirname(skill.path)) == name ||
+          // dsh's flat `<name>.md` skill; a folder's file is SKILL.md.
+          (_paths.basename(skill.path).toLowerCase() != 'skill.md' &&
+              _paths.basenameWithoutExtension(skill.path) == name)) {
         return skill.path;
       }
     }
@@ -188,12 +269,13 @@ class CustomizationStore {
     String name, {
     String? project,
   }) async {
-    if (!kind.creatable || !isCustomizationName(name)) {
+    if (!kind.creatable || !shows(kind) || !isCustomizationName(name)) {
       throw ArgumentError.value(name, 'name');
     }
-    final base = scope == CustomizationScope.user
-        ? await config()
-        : _paths.join(project!, '.claude');
+    final base = await _base(kind, scope, project: project);
+    if (base == null || base.isEmpty) {
+      throw ArgumentError.value(scope, 'scope');
+    }
     final path = switch (kind) {
       CustomizationKind.skills => _paths.join(base, 'skills', name, 'SKILL.md'),
       CustomizationKind.subagents => _paths.join(base, 'agents', '$name.md'),
@@ -216,7 +298,7 @@ class CustomizationStore {
     CustomizationScope scope, {
     String? project,
   }) async {
-    if (!kind.configuredIn(scope) || !supported) return null;
+    if (!kind.configuredIn(scope) || !supported || !shows(kind)) return null;
     if (kind == CustomizationKind.mcps) {
       return project == null ? null : _paths.join(project, '.mcp.json');
     }
@@ -252,36 +334,75 @@ class CustomizationStore {
   /// user's skills, which the next sync writes over.
   static const _synced = 'synced';
 
-  /// Each folder of [root] with a SKILL.md.
+  /// Each folder of [root] with a SKILL.md, and — for dsh, which takes them
+  /// — the flat `<name>.md` files there.
   Future<List<Customization>> _skills(
     CustomizationScope scope,
-    String root,
+    String? root,
   ) async {
+    if (root == null || root.isEmpty) return const [];
     Future<List<String>> folders(String dir) async => [
       for (final child in await _files.children(dir))
         if (child.directory && !_paths.basename(child.path).startsWith('.'))
           child.path,
     ];
     final skills = <Customization>[];
-    for (final folder in await folders(root)) {
-      if (scope == CustomizationScope.user &&
-          _paths.basename(folder) == _synced) {
-        for (final bucket in await folders(folder)) {
+    for (final child in await _files.children(root)) {
+      final name = _paths.basename(child.path);
+      if (name.startsWith('.')) continue;
+      if (!child.directory) {
+        // dsh takes a flat `<name>.md` as a skill too; Claude Code does not.
+        if (agent == CustomizationAgent.dsh && name.endsWith('.md')) {
+          skills.addAll([?await _skillFile(scope, child.path)]);
+        }
+        continue;
+      }
+      if (agent == CustomizationAgent.claudeCode &&
+          scope == CustomizationScope.user &&
+          name == _synced) {
+        for (final bucket in await folders(child.path)) {
           for (final synced in await folders(bucket)) {
-            skills.addAll([?await _skill(CustomizationScope.synced, synced)]);
+            skills.addAll([
+              ?await _skillFolder(CustomizationScope.synced, synced),
+            ]);
           }
         }
       } else {
-        skills.addAll([?await _skill(scope, folder)]);
+        skills.addAll([?await _skillFolder(scope, child.path)]);
       }
     }
     return skills;
   }
 
-  /// The skill in [folder], if it has a SKILL.md; one synced is shown, not
-  /// edited or deleted here.
-  Future<Customization?> _skill(CustomizationScope scope, String folder) async {
-    final path = _paths.join(folder, 'SKILL.md');
+  /// The skill of the folder [folder], in its SKILL.md; one synced is
+  /// shown, not edited or deleted here.
+  Future<Customization?> _skillFolder(
+    CustomizationScope scope,
+    String folder,
+  ) => _skill(
+    scope,
+    _paths.join(folder, 'SKILL.md'),
+    fallback: _paths.basename(folder),
+    removePath: folder,
+  );
+
+  /// The skill of dsh's flat file [path].
+  Future<Customization?> _skillFile(CustomizationScope scope, String path) =>
+      _skill(
+        scope,
+        path,
+        fallback: _paths.basenameWithoutExtension(path),
+        removePath: path,
+      );
+
+  /// The skill in [path], if it reads; [fallback] what it is called where
+  /// its front matter does not say, [removePath] what deleting it removes.
+  Future<Customization?> _skill(
+    CustomizationScope scope,
+    String path, {
+    required String fallback,
+    required String removePath,
+  }) async {
     final text = await _files.read(path);
     if (text == null) return null;
     final synced = scope == CustomizationScope.synced;
@@ -290,12 +411,12 @@ class CustomizationStore {
       scope: scope,
       name: switch (parseFrontMatter(text)['name']) {
         final name? when name.isNotEmpty => name,
-        _ => _paths.basename(folder),
+        _ => fallback,
       },
       description: describeMarkdown(text),
       path: path,
       editable: !synced,
-      removePath: synced ? null : folder,
+      removePath: synced ? null : removePath,
     );
   }
 

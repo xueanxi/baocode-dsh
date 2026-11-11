@@ -163,12 +163,15 @@ class CustomizeViewState extends State<CustomizeView> {
   void didUpdateWidget(CustomizeView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.store, widget.store)) {
-      // Another machine's: from its own projects, the list again.
+      // Another machine's, or another agent's: from its own projects, the
+      // list again, and a kind it does not keep back to skills.
       _project = widget.project;
       _open = null;
       _items = null;
       _error = null;
-      if (oldWidget.kind != widget.kind) _kind = widget.kind;
+      _kind = widget.store.shows(widget.kind)
+          ? widget.kind
+          : CustomizationKind.skills;
       unawaited(_load());
     } else if (oldWidget.kind != widget.kind) {
       show(widget.kind);
@@ -298,9 +301,10 @@ class CustomizeViewState extends State<CustomizeView> {
   ExtensionSwitches get _switches => _switched ?? ExtensionSwitches.current();
 
   /// Whether [_kind]'s rows have switches: skills and MCP servers, which
-  /// Claude Code is given as flag settings.
+  /// Claude Code is given as flag settings; dsh takes none.
   bool get _switchable =>
-      _kind == CustomizationKind.skills || _kind == CustomizationKind.mcps;
+      widget.store.agent == CustomizationAgent.claudeCode &&
+      (_kind == CustomizationKind.skills || _kind == CustomizationKind.mcps);
 
   void _switchesChanged() {
     if (mounted) setState(() {});
@@ -526,8 +530,9 @@ class CustomizeViewState extends State<CustomizeView> {
         CustomizationScope.plugin
       else ...[
         CustomizationScope.user,
-        if (_kind == CustomizationKind.skills ||
-            _kind == CustomizationKind.mcps)
+        if (widget.store.agent == CustomizationAgent.claudeCode &&
+            (_kind == CustomizationKind.skills ||
+                _kind == CustomizationKind.mcps))
           CustomizationScope.synced,
         if (_project != null) ...[
           CustomizationScope.project,
@@ -620,11 +625,12 @@ class CustomizeViewState extends State<CustomizeView> {
         ),
         Container(width: 1, height: 16, color: AppColors.partBorder),
         for (final kind in CustomizationKind.values)
-          _Chip(
-            selected: kind == _kind,
-            onTap: () => show(kind),
-            child: Text(kind.label(l10n)),
-          ),
+          if (widget.store.shows(kind))
+            _Chip(
+              selected: kind == _kind,
+              onTap: () => show(kind),
+              child: Text(kind.label(l10n)),
+            ),
       ],
     );
   }
@@ -779,11 +785,13 @@ class CustomizeViewState extends State<CustomizeView> {
     final tools = item.kind == CustomizationKind.mcps
         ? _probes[_probeKey(item)]?.tools
         : null;
-    final on = switch (item.kind) {
-      CustomizationKind.mcps => _switches.serverEnabled(item.name),
-      CustomizationKind.skills => _switches.skillEnabled(item.name),
-      _ => true,
-    };
+    final on = !_switchable
+        ? true
+        : switch (item.kind) {
+            CustomizationKind.mcps => _switches.serverEnabled(item.name),
+            CustomizationKind.skills => _switches.skillEnabled(item.name),
+            _ => true,
+          };
     return _ItemRow(
       item: item,
       status: _statusOf(item),

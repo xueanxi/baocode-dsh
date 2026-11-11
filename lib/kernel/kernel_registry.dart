@@ -7,6 +7,7 @@ import 'dsh/dsh_locate.dart';
 import 'dsh/dsh_path_setting.dart';
 import 'dsh/dsh_sessions.dart';
 import 'dsh/dsh_transport.dart';
+import '../customize/customizations.dart';
 import '../remote/remote_claude.dart';
 import '../remote/remote_location.dart';
 
@@ -60,6 +61,9 @@ abstract final class KernelRegistry {
           // No project said: nothing says another machine.
           null => true,
         },
+    // Its skills are its own: `~/.dsh/skills` and a project's `.dsh/skills`,
+    // not Claude Code's `~/.claude/skills`.
+    customizations: CustomizationAgent.dsh,
     // What BaoCode started with dsh: dsh names no titles and replays no
     // history, so those are kept here (see [DshCatalog]).
     catalog: const DshCatalog(),

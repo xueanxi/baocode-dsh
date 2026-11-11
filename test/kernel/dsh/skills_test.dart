@@ -3,7 +3,9 @@
 
 import 'dart:io';
 
+import 'package:baocode/customize/customizations.dart';
 import 'package:baocode/kernel/dsh/dsh_skills.dart';
+import 'package:baocode/kernel/kernel_registry.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -28,6 +30,14 @@ Map<String, String> _environment(String home, {String? dshHome}) => {
 };
 
 void main() {
+  test('the dsh kernel keeps skills of its own', () {
+    expect(KernelRegistry.dsh.customizations, CustomizationAgent.dsh);
+    expect(
+      KernelRegistry.claudeCode.customizations,
+      CustomizationAgent.claudeCode,
+    );
+  });
+
   late Directory temp;
 
   setUp(() => temp = Directory.systemTemp.createTempSync('dsh_skills'));

@@ -1,8 +1,17 @@
-// What Claude Code is customized with, as the Customize page lists it:
-// skills, subagents, slash commands, rules (CLAUDE.md and `rules/`), MCP
-// servers, hooks and plugins, each the user's own (under its config folder)
-// or a project's (under `<project>/.claude/`). See customization_store.dart
-// for where each is read from.
+// What an agent is customized with, as the Customize page lists it: skills,
+// subagents, slash commands, rules (CLAUDE.md and `rules/`), MCP servers,
+// hooks and plugins, each the user's own (under its config folder) or a
+// project's. Claude Code keeps them all, under `~/.claude` and
+// `<project>/.claude/`; dsh keeps skills alone, under its own home and a
+// project's `.dsh/`. See customization_store.dart for where each is read
+// from.
+
+/// Whose customizations the page reads: Claude Code's, or dsh's.
+///
+/// dsh has skills only, in `$DSH_HOME/skills` (else `~/.dsh/skills`) and a
+/// project's `.dsh/skills`; the other kinds are Claude Code's and left
+/// alone for it.
+enum CustomizationAgent { claudeCode, dsh }
 
 /// The kinds the page has a chip for, in its order.
 enum CustomizationKind {

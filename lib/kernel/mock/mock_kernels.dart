@@ -9,6 +9,7 @@ import '../dsh/dsh_kernel.dart';
 import '../dsh/dsh_locate.dart';
 import '../dsh/dsh_sessions.dart';
 import '../dsh/mock_dsh_transport.dart';
+import '../../customize/customizations.dart';
 
 /// Kernels over scripted transports: the real adapters, fed recorded
 /// protocol, for tests and demos. Not offered in the app.
@@ -51,6 +52,8 @@ abstract final class MockKernels {
       label: 'DSH',
       icon: Icons.auto_awesome_rounded,
       description: 'DeepSeek Harness',
+      // Its own skills, as the app's dsh keeps them.
+      customizations: CustomizationAgent.dsh,
       create: (context) => DshKernel(
         descriptor,
         context,

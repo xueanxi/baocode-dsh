@@ -48,6 +48,27 @@ abstract final class DshSkills {
     return skills.values.toList()..sort((a, b) => a.name.compareTo(b.name));
   }
 
+  /// The folder dsh keeps its own files in: `$DSH_HOME`, else `~/.dsh`; null
+  /// where [environment] names no home.
+  static String? home(Map<String, String> environment) {
+    final named = environment['DSH_HOME']?.trim() ?? '';
+    if (named.isNotEmpty) return named;
+    final home = AppPaths.home(environment);
+    return home.isEmpty ? null : p.join(home, '.dsh');
+  }
+
+  /// The user's skills: [home]'s `skills`; null where there is no home.
+  static String? userSkillsRoot(Map<String, String> environment) =>
+      switch (home(environment)) {
+        final home? => p.join(home, 'skills'),
+        null => null,
+      };
+
+  /// A project's skills: its nearest ancestor with `.git`'s `.dsh/skills`,
+  /// as dsh resolves the project's skill roots; [cwd]'s where there is none.
+  static String projectSkillsRoot(String cwd) =>
+      p.join(platform.dshProjectRoot(cwd), '.dsh', 'skills');
+
   /// The default roots, lowest rank first (dsh's own order), each with
   /// whether its `.system` child is skipped.
   static List<({String path, bool skipSystem})> _roots(
@@ -60,7 +81,7 @@ abstract final class DshSkills {
       return value.isNotEmpty ? value : fallback;
     }
 
-    final dshHome = named('DSH_HOME', home.isEmpty ? '' : p.join(home, '.dsh'));
+    final dshHome = DshSkills.home(environment);
     final agentsHome = named(
       'DSH_AGENTS_HOME',
       home.isEmpty ? '' : p.join(home, '.agents'),
@@ -69,8 +90,7 @@ abstract final class DshSkills {
     return [
       (path: p.join(project, '.dsh', 'skills'), skipSystem: false),
       (path: p.join(project, '.agents', 'skills'), skipSystem: false),
-      if (dshHome.isNotEmpty)
-        (path: p.join(dshHome, 'skills'), skipSystem: true),
+      if (dshHome != null) (path: p.join(dshHome, 'skills'), skipSystem: true),
       if (agentsHome.isNotEmpty)
         (path: p.join(agentsHome, 'skills'), skipSystem: false),
       if (bundled.isNotEmpty) (path: bundled, skipSystem: false),

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import '../customize/customizations.dart';
 import 'kernel_event.dart';
 import 'queued_messages.dart';
 import 'kernel_types.dart';
@@ -463,6 +464,7 @@ class KernelDescriptor {
     required this.icon,
     required this.description,
     required this.create,
+    this.customizations = CustomizationAgent.claudeCode,
     this.catalog,
     this.available,
   });
@@ -472,6 +474,10 @@ class KernelDescriptor {
   final IconData icon;
   final String description;
   final AgentKernel Function(KernelContext context) create;
+
+  /// Whose customization files its conversations follow: Claude Code's, or
+  /// dsh's own skills. The Customize page reads those.
+  final CustomizationAgent customizations;
 
   /// Its kept sessions, when it keeps any.
   final SessionCatalog? catalog;

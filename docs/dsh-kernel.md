@@ -59,7 +59,7 @@ BAOCODE_DSH_PATH=/path/to/dsh/lib/bin.js node tool/dsh_smoke.mjs
 | 图片 | 以 `initialize` 的 `promptCapabilities.image` 为准；为 false 时发送前剥掉图片并发一条警告，不会把模型没看到的图片当成已发送。握手还没回来时这条能力是「不知道」（`supportsImages` 为 false）：带图的一轮会等握手结束再决定，因此这一轮的 `TurnStarted` 会晚几秒。这在界面上是罕见路径——粘贴图片本身就要求能力已知，所以通常只出现在直接调用内核的代码里（测试、集成）。 |
 | 提示词里的 notes | `KernelTurn.notes` 不发送（dsh 没有对应通道）；`mentions` 已经包含在正文里。 |
 | 工作中发送的消息 | dsh 一次只收一个 prompt（F12），所以由内核排队，当前轮结束后再依次发出；`chat.queuedMessages` 的“插入当前任务”对 DSH 不生效（§5 第 22 条）。 |
-| Customize 页 | 是全局页、与内核无关，只作用于 Claude Code；DSH 不受它影响。 |
+| Customize 页 | 跟随当前对话的内核：DSH 时「技能」页只列和编辑 dsh 的 skill（`$DSH_HOME/skills`、项目的 `.dsh/skills`），不显示 Claude Code 的其它种类和开关；Claude Code 时仍是 `~/.claude`。 |
 | BaoCode 自有工具 | `generate_image`、浏览器、远端操作、用量查询等进程内工具传不给 dsh：ACP 只能接外部 MCP server，而本适配器固定传 `mcpServers: []`。 |
 
 定位顺序（`lib/kernel/dsh/dsh_locate_io.dart`）：
@@ -86,7 +86,8 @@ BAOCODE_DSH_PATH=/path/to/dsh/lib/bin.js node tool/dsh_smoke.mjs
 - 只列 `user-invocable` 不是 false 的；`disable-model-invocation: true` 的仍列（它只有斜杠这一个入口）。frontmatter 缺 `name`/`description`、名字不是 kebab-case、布尔值不合法，或写了 dsh 已废弃的 `userInvocable`/`modelInvocable`/`disableModelInvocation`，整条跳过——与 dsh 一致。
 - 目录 bundle（`<name>/SKILL.md`）与平铺 `<name>.md` 都认。
 - 选中后发出去的仍是字面的 `/名字`，由 dsh 在 `agent/pre-step` 里匹配并加载 `SKILL.md`（F30）；BaoCode 不替换文本，也不自己加载。
-- `/名字` 标签的“打开详情”会打开它的 `SKILL.md`：内核把路径放在 `KernelCommand.path` 上，composer 先用它，再退回 CustomizationStore（Claude Code 的 skills 在那条路里找）。
+- `/名字` 标签的“打开详情”会打开它的 `SKILL.md`：内核把路径放在 `KernelCommand.path` 上，composer 先用它，再退回当前内核的 CustomizationStore（DSH 时在 `.dsh/skills` 里找，Claude Code 时在 `~/.claude/skills` 里找）。
+- 「技能」页（侧栏 Customize、⌘⇧K、设置 → Customize）在 DSH 对话下读的也是 dsh 的根：用户级 `$DSH_HOME/skills`（默认 `~/.dsh/skills`）、项目级 `<项目>/.dsh/skills`；平铺 `<name>.md` 也列出。新建写进 `skills/<名字>/SKILL.md`，删除删掉它的文件夹或那个文件；`.agents/skills` 与 `$DSH_BUNDLED_SKILL_DIR` 只在 `/` 菜单里，不在页面上编辑。
 - 列表在每次打开对话时（`prepare()`）重读，新放的 skill 下次进这个对话就能看到；对话开着时不热更新。
 - 用户在自己的 profile 补丁里写的 `customSkillDirs` 不读：那是 dsh 的组合配置，BaoCode 不解析。
 - dsh 的主机命令（`/compact`、`/goal` 等）不列：命令面只在 dsh 自己的 TUI/Web 里挂，ACP 下没有（`dsh-commands` 的 README 明说 ACP automation 不提供这个面）。
@@ -389,6 +390,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 内核选 DSH 的项目里「生成提交消息」有结果（约 6 秒），dsh web 的会话列表**没有**多出这次提问
 - [ ] 同一个项目里输入框的「提示词增强」有结果（约 6 秒），dsh web 的会话列表**没有**多出这次提问
 - [ ] 输入框打 `/` 能看到 `~/.dsh/skills` 里的 skill（选中后发给 dsh 的是字面 `/名字`），点它的“打开详情”能打开 `SKILL.md`
+- [ ] 切到 DSH 后打开侧栏「技能」：列出的是 `~/.dsh/skills` 的 skill，新建的落在这个目录，改/删不动 `~/.claude/skills`
 - [ ] agent 干活时再发一句：输入框可用，消息出现在输入框上方的队列里；当前轮结束后它自己开始，回复接在后面
 - [ ] 队列里的消息能撤回、拖到别的位置；“立即发送”会停掉当前轮，先发这一句
 

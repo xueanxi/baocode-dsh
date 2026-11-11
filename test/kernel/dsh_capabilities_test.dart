@@ -198,6 +198,7 @@ KernelDescriptor _away(KernelDescriptor kernel) => KernelDescriptor(
   icon: kernel.icon,
   description: kernel.description,
   create: kernel.create,
+  customizations: kernel.customizations,
   catalog: kernel.catalog,
   available: (_) => false,
 );

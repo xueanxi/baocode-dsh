@@ -79,6 +79,8 @@ void main() {
     expect(await store.commandFile('cloudflare:wrangler'), pluginSkill);
     expect(await store.commandFile('cloudflare:nope'), isNull);
     expect(await store.commandFile('compact', project: project), isNull);
+    // A folder's file is SKILL.md, not a name to match a command on.
+    expect(await store.commandFile('SKILL', project: project), isNull);
   });
 
   test('lists the user\'s and the project\'s skills, agents, commands '
@@ -360,5 +362,177 @@ void main() {
     await store.delete(listed.single);
     expect(Directory(p.dirname(skill)).existsSync(), isFalse);
     expect(await store.list(CustomizationKind.skills), isEmpty);
+  });
+
+  group('dsh', () {
+    late CustomizationStore dsh;
+    late String home;
+
+    setUp(() {
+      home = p.join(temp.path, 'home');
+      dsh = CustomizationStore(
+        homeDir: home,
+        agent: CustomizationAgent.dsh,
+        environment: const {},
+      );
+    });
+
+    test(
+      'reads the user\'s and a project\'s .dsh skills, flat ones too',
+      () async {
+        final user = p.join(home, '.dsh', 'skills');
+        write(
+          p.join(user, 'pdf', 'SKILL.md'),
+          '---\nname: pdf\ndescription: Reads PDFs\n---\n',
+        );
+        write(
+          p.join(user, 'flat.md'),
+          '---\nname: flat\ndescription: A flat skill\n---\n',
+        );
+        // dsh skips `.system`; Claude Code's skills are not its own.
+        write(
+          p.join(user, '.system', 'builtin', 'SKILL.md'),
+          '---\nname: builtin\ndescription: System\n---\n',
+        );
+        write(
+          p.join(home, '.claude', 'skills', 'claude-only', 'SKILL.md'),
+          '---\nname: claude-only\ndescription: Claude\n---\n',
+        );
+        // A project's, at the nearest ancestor with .git.
+        final repo = p.join(temp.path, 'repo');
+        write(p.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+        final folder = p.join(repo, 'packages', 'app');
+        Directory(folder).createSync(recursive: true);
+        write(
+          p.join(repo, '.dsh', 'skills', 'deploy', 'SKILL.md'),
+          '# Deploy\n\nShips it.\n',
+        );
+
+        final skills = await dsh.list(
+          CustomizationKind.skills,
+          project: folder,
+        );
+        expect(
+          [for (final s in skills) (s.scope, s.name, s.description)],
+          [
+            (CustomizationScope.user, 'flat', 'A flat skill'),
+            (CustomizationScope.user, 'pdf', 'Reads PDFs'),
+            (CustomizationScope.project, 'deploy', 'Ships it.'),
+          ],
+        );
+        expect(skills.first.path, p.join(user, 'flat.md'));
+        expect(skills.first.removePath, skills.first.path);
+        expect(skills[1].removePath, p.join(user, 'pdf'));
+        expect(
+          skills.last.path,
+          p.join(repo, '.dsh', 'skills', 'deploy', 'SKILL.md'),
+        );
+        expect(
+          skills.last.removePath,
+          p.join(repo, '.dsh', 'skills', 'deploy'),
+        );
+
+        // The other kinds are Claude Code's alone.
+        for (final kind in CustomizationKind.values) {
+          if (kind == CustomizationKind.skills) continue;
+          expect(
+            await dsh.list(kind, project: folder),
+            isEmpty,
+            reason: '$kind',
+          );
+        }
+      },
+    );
+
+    test('makes, lists and deletes skills under dsh\'s own folders', () async {
+      final skill = await dsh.create(
+        CustomizationKind.skills,
+        CustomizationScope.user,
+        'release-notes',
+      );
+      expect(
+        skill,
+        p.join(home, '.dsh', 'skills', 'release-notes', 'SKILL.md'),
+      );
+      expect(parseFrontMatter(await dsh.read(skill))['name'], 'release-notes');
+      await expectLater(
+        dsh.create(
+          CustomizationKind.skills,
+          CustomizationScope.user,
+          'release-notes',
+        ),
+        throwsA(isA<IdeFileExistsException>()),
+      );
+
+      final deploy = await dsh.create(
+        CustomizationKind.skills,
+        CustomizationScope.project,
+        'deploy',
+        project: project,
+      );
+      expect(deploy, p.join(project, '.dsh', 'skills', 'deploy', 'SKILL.md'));
+
+      // A kind dsh does not keep is not made.
+      expect(
+        () => dsh.create(
+          CustomizationKind.subagents,
+          CustomizationScope.user,
+          'reviewer',
+        ),
+        throwsArgumentError,
+      );
+
+      final listed = await dsh.list(CustomizationKind.skills, project: project);
+      expect(
+        [for (final s in listed) (s.scope, s.name)],
+        [
+          (CustomizationScope.user, 'release-notes'),
+          (CustomizationScope.project, 'deploy'),
+        ],
+      );
+      await dsh.delete(listed.first);
+      expect(
+        Directory(p.join(home, '.dsh', 'skills', 'release-notes')).existsSync(),
+        isFalse,
+      );
+
+      // A flat skill is deleted as the file it is.
+      final flat = p.join(home, '.dsh', 'skills', 'flat.md');
+      write(flat, '---\nname: flat\ndescription: Flat\n---\n');
+      final flatItem = (await dsh.list(CustomizationKind.skills))
+          .singleWhere((s) => s.name == 'flat');
+      await dsh.delete(flatItem);
+      expect(File(flat).existsSync(), isFalse);
+    });
+
+    test('reads DSH_HOME, and finds a /command\'s skill there', () async {
+      final moved = p.join(temp.path, 'moved-dsh');
+      final movedStore = CustomizationStore(
+        homeDir: home,
+        agent: CustomizationAgent.dsh,
+        environment: {'DSH_HOME': moved},
+      );
+      final path = p.join(moved, 'skills', 'pdf', 'SKILL.md');
+      write(path, '---\nname: pdf\ndescription: Reads PDFs\n---\n');
+      expect(await movedStore.commandFile('pdf'), path);
+      expect(await movedStore.commandFile('pdf-tools'), isNull);
+
+      final flat = p.join(moved, 'skills', 'notes.md');
+      write(flat, '---\nname: notes\ndescription: Notes\n---\n');
+      expect(await movedStore.commandFile('notes'), flat);
+    });
+
+    test('the same store as another agent keeps its files', () async {
+      final claude = CustomizationStore(configDir: config, homeDir: home);
+      final asDsh = claude.forAgent(CustomizationAgent.dsh);
+      expect(asDsh.agent, CustomizationAgent.dsh);
+      expect(asDsh.configDir, config);
+      expect(asDsh.homeDir, home);
+      expect(identical(claude.forAgent(CustomizationAgent.dsh), asDsh), isTrue);
+      expect(
+        identical(claude.forAgent(CustomizationAgent.claudeCode), claude),
+        isTrue,
+      );
+    });
   });
 }

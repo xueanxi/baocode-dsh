@@ -1496,6 +1496,11 @@ class _WorkbenchState extends State<Workbench> implements WindowDelegate {
   /// The settings' pages, and Customize's, for the palette.
   List<PaletteAction> _paletteSettings() {
     final l10n = context.l10n;
+    // What the page will show (see [_buildCustomize]): dsh's skills on this
+    // machine, Claude Code's on another.
+    final agent = _workspace.sidebarHost == null
+        ? _customizeAgent
+        : CustomizationAgent.claudeCode;
     return [
       for (final section in SettingsSection.values)
         PaletteAction(
@@ -1506,12 +1511,15 @@ class _WorkbenchState extends State<Workbench> implements WindowDelegate {
         ),
       if (widget.customizations != null)
         for (final kind in CustomizationKind.values)
-          PaletteAction(
-            id: 'customize.${kind.name}',
-            label: '${l10n.customizeTitle}: ${kind.label(l10n)}',
-            icon: kind.icon,
-            run: () => _showCustomize(kind),
-          ),
+          // dsh has skills alone; the page shows those whatever is asked.
+          if (agent == CustomizationAgent.claudeCode ||
+              kind == CustomizationKind.skills)
+            PaletteAction(
+              id: 'customize.${kind.name}',
+              label: '${l10n.customizeTitle}: ${kind.label(l10n)}',
+              icon: kind.icon,
+              run: () => _showCustomize(kind),
+            ),
     ];
   }
 
@@ -2999,6 +3007,12 @@ class _WorkbenchState extends State<Workbench> implements WindowDelegate {
     if (chat == null) return _workspace.preferredKernel.id;
     return chat.isOpen ? chat.session.kernel.id : chat.kernel.id;
   }
+
+  /// The agent whose customizations show: the conversation in view's, else
+  /// the one a new agent would start on.
+  CustomizationAgent get _customizeAgent =>
+      _workspace.current?.kernel.customizations ??
+      _workspace.preferredKernel.customizations;
 
   /// The sidebar docked beside [body] (by default the chat's panes).
   Widget _buildWide({Widget? body}) {
@@ -4594,19 +4608,29 @@ class _WorkbenchState extends State<Workbench> implements WindowDelegate {
     final host = _workspace.sidebarHost;
     final projects = _workspace.sidebarProjectsOn(host);
     final project = _paletteProject;
+    // dsh runs on this machine alone: another machine's page is Claude
+    // Code's.
+    final agent = host == null
+        ? _customizeAgent
+        : CustomizationAgent.claudeCode;
+    final shown =
+        (host == null
+                ? store
+                : _hostCustomizations[host] ??= CustomizationStore(
+                    disk: RemoteCustomizationDisk(SshHosts.instance[host]),
+                  ))
+            .forAgent(agent);
     return CustomizeView(
       key: _customizeKey,
-      store: host == null
-          ? store
-          : _hostCustomizations[host] ??= CustomizationStore(
-              disk: RemoteCustomizationDisk(SshHosts.instance[host]),
-            ),
+      store: shown,
       host: host == null ? null : _workspace.hostLabel(host),
       projects: projects,
       project: project != null && projects.contains(project)
           ? project
           : projects.firstOrNull,
-      kind: _customizeKind,
+      kind: agent == CustomizationAgent.dsh
+          ? CustomizationKind.skills
+          : _customizeKind,
       onClose: _closeCustomize,
       leading: !header && showToggle && !_sidebarAtRight
           ? _showSidebarButton()

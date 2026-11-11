@@ -18,6 +18,7 @@ import 'package:baocode/ide/ide_code_editor.dart';
 import 'package:baocode/ide/ide_input.dart';
 import 'package:baocode/ide/ide_switch.dart';
 import 'package:baocode/kernel/extension_switches.dart';
+import 'package:baocode/kernel/mock/mock_kernels.dart';
 import 'package:baocode/ide/markdown/markdown_preview.dart';
 import 'package:baocode/keybindings/keybinding_service.dart';
 import 'package:baocode/main.dart';
@@ -27,16 +28,24 @@ import 'package:baocode/workspace/workspace.dart';
 
 /// Skills kept in memory, by file.
 class _MemoryStore implements CustomizationStore {
+  _MemoryStore({this.agent = CustomizationAgent.claudeCode});
+
   final Map<String, String> files = {
     '/c/skills/pdf/SKILL.md':
         '---\nname: pdf\ndescription: Reads PDF files\n---\n\nBody\n',
   };
 
   @override
+  final CustomizationAgent agent;
+
+  @override
   String? get configDir => '/c';
 
   @override
   String? get homeDir => null;
+
+  @override
+  Map<String, String>? get environment => null;
 
   @override
   bool get supported => true;
@@ -49,6 +58,14 @@ class _MemoryStore implements CustomizationStore {
 
   @override
   Future<String> config() async => '/c';
+
+  @override
+  CustomizationStore forAgent(CustomizationAgent agent) => this;
+
+  @override
+  bool shows(CustomizationKind kind) =>
+      agent == CustomizationAgent.claudeCode ||
+      kind == CustomizationKind.skills;
 
   /// The MCP servers listed.
   List<Customization> servers = const [];
@@ -117,14 +134,15 @@ final _mac = TargetPlatformVariant.only(TargetPlatform.macOS);
 
 Future<Workspace> _pumpApp(
   WidgetTester tester,
-  CustomizationStore store,
-) async {
+  CustomizationStore store, {
+  Workspace? workspace,
+}) async {
   tester.view.physicalSize = const Size(1400, 900);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   KeybindingService.instance = KeybindingService();
   addTearDown(() => KeybindingService.instance = KeybindingService());
-  final workspace = Workspace.mock();
+  workspace ??= Workspace.mock();
   await tester.pumpWidget(
     BaoCodeApp(workspace: workspace, customizations: store),
   );
@@ -178,6 +196,31 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(CustomizeView), findsNothing);
     expect(workspace.selected.title, 'Rate limit per API key');
+  }, variant: _mac);
+
+  testWidgets('a dsh agent\'s Customize has skills alone', (tester) async {
+    final store = _MemoryStore(agent: CustomizationAgent.dsh);
+    final workspace = Workspace(
+      projects: const [Project('baocode', '~/code/baocode')],
+      kernels: [MockKernels.dsh, MockKernels.claudeCode],
+    );
+    await _pumpApp(tester, store, workspace: workspace);
+    await tester.tap(_inSidebar(find.text('Skills')));
+    await tester.pumpAndSettle();
+    expect(find.byType(CustomizeView), findsOneWidget);
+    expect(_inView(find.text('pdf')), findsOneWidget);
+    expect(_inView(find.text('Skills')), findsOneWidget);
+    for (final chip in [
+      'Plugins',
+      'MCPs',
+      'Subagents',
+      'Rules',
+      'Commands',
+      'Hooks',
+    ]) {
+      expect(_inView(find.text(chip)), findsNothing);
+    }
+    expect(_inView(find.text('Synced from claude.ai')), findsNothing);
   }, variant: _mac);
 
   testWidgets('Customize has no side panel rail, the agent\'s', (tester) async {
