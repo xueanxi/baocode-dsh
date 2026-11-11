@@ -114,8 +114,8 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 
 ### 5.2 能力声明
 
-声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ProvidesCommands`、`ReportsContext`、`AcceptsImages`、`QueuesMessages`、`RewindsConversation`；描述符带 `catalog: DshCatalog`（见 §5.13）。
-不声明：`LoadsHistory`、fork、重命名、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
+声明：`SelectsModel`、`SelectsPermission`、`SelectsEffort`、`ProvidesCommands`、`ReportsContext`、`AcceptsImages`、`QueuesMessages`、`RewindsConversation`、`RenamesSession`、`TitlesItsOwnSessions`；描述符带 `catalog: DshCatalog`（见 §5.13）。`RenamesSession` 是 BaoCode 自己的改名接口（ACP 的 `session/rename` 仍是 `-32601`，见 F18）；`TitlesItsOwnSessions` 让新会话的首条消息由 dsh 自己的 `headless` 一次性问答起标题（§5.14）。
+不声明：`LoadsHistory`、fork、后台任务、MCP 管理、计划模式、`SuggestsFiles`、`ReportsUsage`、`ReportsUsageLimit`、`WatchesEdits`、`MovesSessions`、`StartsPlans`、`RevertsChanges`。
 
 要点：
 
@@ -254,7 +254,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 ### 5.10 跨面与界面
 
 - **可用性**：`KernelDescriptor.available` 谓词。DSH 仅当「项目是单目录、且在本机」时可用；多文件夹工作区（cwd 是 `<data>/workspaces/<id>` 的空目录）与远端项目下不提供。Claude 不设谓词（永远可用）。
-- **标题**：DSH 不声明 `RenamesSession`，自动起标题已经因此不触发；手动「总结标题」也要按 `canRename` 关掉，避免把 DSH 对话文本发给 Claude Haiku。
+- **标题**：DSH 声明 `RenamesSession` 与 `TitlesItsOwnSessions`。新会话的首条消息后，内核用 `askDsh` 走同一份 `dsh.env` 做一次性标题生成（不把 DSH 对话文本发给 Claude Haiku），成功则写回账本并发 `SessionRenamed`；失败或取消时保留首行。手动双击改名只写账本；手动「总结标题」也走内核的 `titleFor`（`askDsh`）。ACP 的 `session/rename` 仍不提供（F18）。
 - **图片**：`AcceptsImages.supportsImages`；真实能力为 false 时剥掉图片并提示（提示在同一轮内）。握手未完成时它是 false（「还不知道」），带图的一轮等握手再决定，不抢先剥掉。
 - **线程记住的内核在本项目不可用**（例如把 DSH 对话挪进多文件夹项目）：会话以当前第一个可用内核打开（`ChatSession._availableKernel`）；一个都不可用时才保留原内核。不报错。
 - **用量**：不声明 `ReportsUsage`（那是账号额度）；每笔调用的令牌由 `baocode-usage-bridge` 记入设置→用量（§5.18）。
@@ -284,7 +284,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 不读 `~/.dsh` 的原因：`session/list` 只给 id 与 cwd（F17），`session/resume` 不重放历史（F15），session 文件是 dsh 的内部格式（`session.v4.jsonl.zstd`，可能随 dsh 升级变化）。所以 BaoCode 记自己的一份：
 
 - **位置**：`<data>/dsh/sessions/index/<id>.json`（`id`、`cwd`、`title`、`updatedAt`）与 `history/<id>.json`（条目用 `ChatCodec` 编码）。一个会话一对文件，几个内核同时写也互不加锁；原子写。
-- **何时写**：`session/new` 返回后立刻写索引（本轮失败也算存在过）；每轮 `TurnEnded` 写历史与时间。标题取第一条消息的第一行（与侧栏命名新 agent 的规则一致）。
+- **何时写**：`session/new` 返回后立刻写索引（本轮失败也算存在过）；每轮 `TurnEnded` 写历史与时间。标题先取第一条消息的第一行（与侧栏命名新 agent 的规则一致），dsh 的一次性标题回来后再写一次（§5.10、§5.14）；用户改名立即写。
 - **何时读**：`DshCatalog.projects()` / `sessionsIn()` 读索引，侧栏据此列出；`prepare()` / 第一次 `send()` 起进程之前按 `KernelContext.resume.id` 读历史，以 `HistoryPrepended` 先发出去。dsh 的 `session/resume` 在这之后才发生，顺序不能反。
 - **id**：读回历史里的 `message:<n>` / `thought:<n>` 让翻译层从最大的 n 继续；新进程从 1 数起会覆盖旧条目。
 - **删除**：`DshCatalog.delete` 只删本地这对文件；dsh 自带的 session 文件仍在，dsh web 仍能看到。本版本之前建的会话没有本地记录，不会出现在侧栏。
@@ -300,7 +300,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 - **不给它工具的空子**：`DSH_PERMISSION_MODE=read-only`、cwd 就是临时目录，`system-prompt` 关掉 identity 与 runtime context、persona 改成"一次回答、不要工具"；即使模型仍去调工具，读到的也只是个空目录，写入会被拒（F23 的 `ask` 无人应答即拒）。
 - **解析只认 `final`**：`dshAskAnswer` 取最后一个 `final.text`；空则用 `turn_end.reason.error.message`，再退到 stderr 尾部（`DshRedact` 过），最后是 `dsh gave no answer (exit N).`。
 - **不做跨内核回退**：内核是 Claude Code 就仍问 Claude（哪怕它的 CLI 在这台机器上坏了），是 DSH 就问 DSH；失败照原话报出。跨内核偷偷换模型会让"我的提交消息是谁写的"说不清。
-- **局限**：每次约 6 秒（起 node + 一次模型调用）；远端项目与多文件夹工作区不提供 DSH，自然仍走 Claude；会话标题、Stash AI 这类同源调用**这次没动**，仍走 `askClaudeHaiku`。
+- **局限**：每次约 6 秒（起 node + 一次模型调用）；远端项目与多文件夹工作区不提供 DSH，自然仍走 Claude；会话标题现在也走这条路（DSH 内核的 `askDshTitle`，见 §5.10），Stash AI 这类同源调用仍走 `askClaudeHaiku`。
 
 ### 5.15 `/` 菜单里的 skill
 
@@ -415,7 +415,7 @@ ACP 不给命令列表（F30），但 `/name` 当正文发出去会被 dsh 加�
 - 列出 dsh web 里开始的会话；用 dsh 的 `session/delete` 真删会话（本版本 ACP 没有 delete，BaoCode 的删除只删本地账本）
 - token 级流式文本
 - 会话内切换权限档位（dsh 不支持改已建会话的档位）
-- fork / 重命名 / 后台任务 / MCP 管理 / 计划模式（编辑用户消息见 §5.19：用 surface replace，不是 fork/rewind 协议）
+- fork / 后台任务 / MCP 管理 / 计划模式（编辑用户消息见 §5.19：用 surface replace，不是 fork/rewind 协议；ACP 的 `session/rename` 仍不支持，BaoCode 侧的改名与标题见 §5.10）
 - 把工作中发送的消息插进当前轮（`chat.queuedMessages` 的 `duringTurn`）：ACP 一次只收一个 prompt，DSH 恒为当前轮结束后再发
 - 编辑监听与 diff review
 - 远端 SSH 主机上的 dsh、多文件夹工作区里的 dsh

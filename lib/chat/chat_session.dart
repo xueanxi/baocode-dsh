@@ -587,6 +587,18 @@ class ChatSession extends ChangeNotifier implements ChatFeed {
 
   bool get canRename => _kernel is RenamesSession;
 
+  /// Whether the kernel titles its own conversations from the first message
+  /// (see [TitlesItsOwnSessions]): the app's titler is not asked, and the
+  /// title comes back as a rename.
+  bool get titlesItsOwnSessions => _kernel is TitlesItsOwnSessions;
+
+  /// A title for [text] from the kernel's own model, when it titles its own
+  /// conversations (see [TitlesItsOwnSessions]); null otherwise.
+  Future<String?> titleFor(String text) => switch (_kernel) {
+    final TitlesItsOwnSessions kernel => kernel.titleFor(text),
+    _ => Future<String?>.value(),
+  };
+
   /// Whether the conversation can be copied into a new one (see [fork]).
   bool get canFork => switch (_kernel) {
     final ForksConversation kernel => kernel.canFork,

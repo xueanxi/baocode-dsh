@@ -8,6 +8,7 @@ import '../codex/mock_codex_transport.dart';
 import '../dsh/dsh_kernel.dart';
 import '../dsh/dsh_locate.dart';
 import '../dsh/dsh_sessions.dart';
+import '../dsh/dsh_title.dart';
 import '../dsh/mock_dsh_transport.dart';
 import '../../customize/customizations.dart';
 
@@ -44,6 +45,7 @@ abstract final class MockKernels {
   static KernelDescriptor dshOn(
     MockDshTransport transport, {
     DshSessionStore? sessions,
+    DshTitleAsker? titleAsker,
   }) {
     final store = sessions ?? MemoryDshSessionStore();
     late final KernelDescriptor descriptor;
@@ -60,6 +62,9 @@ abstract final class MockKernels {
         start: (_) async => transport,
         locate: _locateDsh,
         sessions: store,
+        // No title is asked of a real dsh: a mock's first message asks
+        // nothing, and a test that wants one gives its own.
+        titleAsker: titleAsker ?? (_, {route, cancel}) async => null,
         // No login shell is asked: a mock process is not one to run
         // anything, and the shell's would be a test's own.
         environment: () async => const {'PATH': '/usr/bin'},

@@ -343,6 +343,17 @@ abstract interface class RenamesSession {
   void rename(String title);
 }
 
+/// The kernel titles its own conversations: after the first message it asks
+/// its own model (DSH's route, say) for one, rather than the app's own
+/// titler, and reports it as a session rename (`SessionRenamed`). A kernel
+/// that declares this also declares [RenamesSession], so a name the user
+/// gives stands.
+abstract interface class TitlesItsOwnSessions {
+  /// A title for [text] (a first message, or what was asked summed up) from
+  /// the kernel's own model; null when it gives none.
+  Future<String?> titleFor(String text);
+}
+
 /// Takes pictures with a message ([KernelTurn.images]).
 abstract interface class AcceptsImages {
   /// Whether a picture sent now would actually reach the model: kernels that

@@ -13,6 +13,8 @@ import 'package:baocode/chat/composer/composer_embeds.dart';
 import 'package:baocode/kernel/agent_kernel.dart';
 import 'package:baocode/kernel/claude_code/claude_code_kernel.dart';
 import 'package:baocode/kernel/claude_code/mock_claude_code_transport.dart';
+import 'package:baocode/kernel/dsh/mock_dsh_transport.dart';
+import 'package:baocode/kernel/mock/mock_kernels.dart';
 import 'package:baocode/main.dart';
 import 'package:baocode/models/model_provider.dart';
 import 'package:baocode/models/model_providers.dart';
@@ -457,6 +459,46 @@ void main() {
     await tester.pump();
     expect(asked, hasLength(1));
     session.stop();
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('a DSH conversation is titled by dsh itself, not by the '
+      'app\'s titler', (tester) async {
+    final asked = <String>[];
+    final appAsked = <String>[];
+    final workspace = await pumpLoaded(
+      tester,
+      kernel: MockKernels.dshOn(
+        MockDshTransport(),
+        titleAsker: (message, {route, cancel}) async {
+          asked.add(message);
+          return 'Composer change';
+        },
+      ),
+      titler: (message, {model, location, session}) async {
+        appAsked.add(message);
+        return 'App title';
+      },
+    );
+    await tester.runAsync(() => workspace.openFolder('/tmp/project'));
+    await tester.pump();
+    final thread = workspace.selected;
+    expect(thread.session.canRename, isTrue);
+    expect(thread.session.titlesItsOwnSessions, isTrue);
+
+    thread.session.send(const ComposerMessage(text: 'Change the composer'));
+    for (var i = 0; i < 100 && thread.title != 'Composer change'; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 1)),
+      );
+      await tester.pump();
+    }
+    expect(asked, ['Change the composer']);
+    expect(appAsked, isEmpty);
+    expect(thread.title, 'Composer change');
+    expect(inSidebar(find.text('Composer change')), findsOneWidget);
+
+    thread.session.stop();
     await tester.pump(const Duration(seconds: 1));
   });
 

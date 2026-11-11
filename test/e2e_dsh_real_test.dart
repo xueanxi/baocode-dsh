@@ -49,6 +49,8 @@ void main() {
         locate: locateDsh,
         environment: ClaudeEnvironment.of,
         sessions: MemoryDshSessionStore(),
+        // The panel is what this asks of dsh; a title would be a second run.
+        titleAsker: (_, {route, cancel}) async => null,
       );
       addTearDown(() async {
         kernel.dispose();

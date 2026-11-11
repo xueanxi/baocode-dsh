@@ -306,6 +306,7 @@ class _FakeDsh {
     // Named rather than looked for: no test reads the user's own ~/.dsh.
     route: testDshRoute,
     credentials: (_) async => true,
+    titleAsker: (_, {route, cancel}) async => null,
   );
 }
 

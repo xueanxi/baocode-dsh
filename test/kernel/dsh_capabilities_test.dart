@@ -193,21 +193,36 @@ void main() {
   });
 
   group('a title summed up by hand', () {
-    test('is not asked of a kernel that keeps none', () async {
-      final asked = <String>[];
-      final workspace = _workspace(MockKernels.dsh, asked);
+    test('is asked of the kernel that titles its own, not the app\'s '
+        'titler', () async {
+      final appAsked = <String>[];
+      final dshAsked = <String>[];
+      final workspace = _workspace(
+        MockKernels.dshOn(
+          MockDshTransport(),
+          titleAsker: (message, {route, cancel}) async {
+            dshAsked.add(message);
+            return 'Dsh title';
+          },
+        ),
+        appAsked,
+      );
       addTearDown(workspace.dispose);
       final thread = workspace.startAgent(workspace.projects.single);
-      expect(thread.session.canRename, isFalse);
+      expect(thread.session.canRename, isTrue);
+      expect(thread.session.titlesItsOwnSessions, isTrue);
 
       thread.session.send(const ComposerMessage(text: '把输入框改得随内容增高'));
       await _settled(thread.session);
       expect(askedText(thread.session), isNotEmpty);
-      // Its kernel keeps no title: not even the automatic one asked.
-      expect(asked, isEmpty);
+      // The automatic title came from dsh, not from the app's titler.
+      expect(dshAsked, contains('把输入框改得随内容增高'));
+      expect(appAsked, isEmpty);
 
-      expect(await workspace.summarizeTitle(thread), isNull);
-      expect(asked, isEmpty);
+      final before = dshAsked.length;
+      expect(await workspace.summarizeTitle(thread), 'Dsh title');
+      expect(dshAsked, hasLength(before + 1));
+      expect(appAsked, isEmpty);
     });
 
     test('goes to the titler for a kernel that keeps one', () async {

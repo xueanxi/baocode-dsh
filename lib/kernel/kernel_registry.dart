@@ -65,7 +65,8 @@ abstract final class KernelRegistry {
     // not Claude Code's `~/.claude/skills`.
     customizations: CustomizationAgent.dsh,
     // What BaoCode started with dsh: dsh names no titles and replays no
-    // history, so those are kept here (see [DshCatalog]).
+    // history, so those are kept here (see [DshCatalog]); the title is
+    // asked of dsh itself once (`dsh_title.dart`).
     catalog: const DshCatalog(),
   );
 

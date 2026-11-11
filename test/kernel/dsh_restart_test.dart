@@ -225,6 +225,7 @@ DshKernel _kernel(
   sessions: sessions,
   route: testDshRoute,
   credentials: (_) async => true,
+  titleAsker: (_, {route, cancel}) async => null,
 );
 
 /// Runs the event loop until [done] holds, giving up after a while: what the

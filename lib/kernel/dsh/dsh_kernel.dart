@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:bao_remote/local.dart' show ClaudeEnvironment;
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show debugPrint, listEquals;
 import 'package:flutter/material.dart';
 
 import '../../chat/chat_models.dart';
@@ -25,6 +25,7 @@ import 'dsh_question_server.dart';
 import 'dsh_questions.dart';
 import 'dsh_sessions.dart';
 import 'dsh_skills.dart';
+import 'dsh_title.dart';
 import 'dsh_transport.dart';
 import 'dsh_translator.dart';
 import 'dsh_usage_bridge.dart';
@@ -68,7 +69,9 @@ class DshKernel
         ReportsContext,
         AcceptsImages,
         QueuesMessages,
-        RewindsConversation {
+        RewindsConversation,
+        RenamesSession,
+        TitlesItsOwnSessions {
   DshKernel(
     this.descriptor,
     this._context, {
@@ -80,7 +83,9 @@ class DshKernel
     DshUsageServerStarter? usageServer,
     this._credentials,
     DshRoute? route,
+    DshTitleAsker? titleAsker,
   }) : _environment = environment ?? ClaudeEnvironment.of,
+       _titleAsker = titleAsker ?? askDshTitle,
        _givenRoute = route,
        _sessions = sessions ?? DshSessionStore.file(),
        _questionServerStart = questionServer ?? startDshQuestionServer,
@@ -143,6 +148,10 @@ class DshKernel
   /// and for reading back (see [DshCatalog]).
   final DshSessionStore _sessions;
 
+  /// What asks dsh's own route for a title of the first message (see
+  /// `dsh_title.dart`): a test gives one, and no process starts.
+  final DshTitleAsker _titleAsker;
+
   /// What was said in this conversation, as reported, to keep at each
   /// turn's end (see `docs/spec/dsh-kernel.md` §5.2).
   final Transcript _kept = Transcript();
@@ -154,6 +163,16 @@ class DshKernel
   /// What it was first asked, its first line: the title its session is
   /// kept under until dsh's own names anything.
   String _title;
+
+  /// Whether the first message's title was asked for, once: a resumed
+  /// conversation, or one the user named, is not asked again.
+  bool _titleAsked = false;
+
+  /// A name the user gave: a slower title from dsh shall not replace it.
+  bool _titleNamed = false;
+
+  /// Stops the title ask on a name, or when the kernel is disposed.
+  Completer<void>? _titleCancel;
 
   late final DshTranslator _translator;
 
@@ -412,6 +431,67 @@ class DshKernel
     }
   }
 
+  /// Asks dsh's own route for a title of [text], the first message: the
+  /// first line stands until it comes, and if it does not. A name the user
+  /// gives meanwhile wins ([rename]).
+  void _askTitle(String text) {
+    if (_titleAsked || _disposed) return;
+    _titleAsked = true;
+    final cancel = _titleCancel = Completer<void>();
+    unawaited(
+      Future.sync(
+            () => _titleAsker(text, route: _givenRoute, cancel: cancel.future),
+          )
+          .then((title) async {
+            if (_disposed || _titleNamed) return;
+            final cleaned = title?.trim() ?? '';
+            if (cleaned.isEmpty || cleaned == _title) return;
+            _title = cleaned;
+            emit(SessionRenamed(nextSeq, _title));
+            await _keepTitle();
+          })
+          .catchError((Object error) {
+            debugPrint('DSH title not generated: $error');
+          })
+          .whenComplete(() {
+            if (identical(_titleCancel, cancel)) _titleCancel = null;
+          }),
+    );
+  }
+
+  /// Keeps just the title, mid-turn, leaving the history a turn still adds
+  /// to for [_keepSession] at its end.
+  Future<void> _keepTitle() async {
+    final id = _sessionId;
+    if (id == null || _disposed) return;
+    try {
+      await _sessions.keep(
+        DshSession(id: id, cwd: _cwd, title: _title, updatedAt: DateTime.now()),
+      );
+    } on Object catch (error) {
+      debugPrint('DSH conversation title not kept: $error');
+    }
+  }
+
+  @override
+  void rename(String title) {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) return;
+    _titleNamed = true;
+    _titleAsked = true;
+    final cancel = _titleCancel;
+    _titleCancel = null;
+    if (cancel != null && !cancel.isCompleted) cancel.complete();
+    if (trimmed == _title) return;
+    _title = trimmed;
+    emit(SessionRenamed(nextSeq, _title));
+    unawaited(_keepTitle());
+  }
+
+  @override
+  Future<String?> titleFor(String text) =>
+      _titleAsker(text, route: _givenRoute);
+
   @override
   void prepare() {
     _releaseWanted = false;
@@ -487,6 +567,9 @@ class DshKernel
   @override
   void dispose() {
     _disposed = true;
+    final titleCancel = _titleCancel;
+    _titleCancel = null;
+    if (titleCancel != null && !titleCancel.isCompleted) titleCancel.complete();
     unawaited(_subscription?.cancel());
     _subscription = null;
     _failPending('DSH stopped');
@@ -779,7 +862,17 @@ class DshKernel
     }
     // Its first message names the session, as it names a new agent's in
     // the sidebar: kept for the next run, where dsh names no title (F17).
-    if (_title.isEmpty) _title = _titleOf(turn.text);
+    // dsh's own route then gives a better one, the first line standing
+    // until it comes, and if it does not.
+    if (_title.isEmpty) {
+      _title = _titleOf(turn.text);
+      // A picture's marker alone is named after the file by the app, not
+      // asked of dsh.
+      if (_title.isNotEmpty &&
+          _title.replaceAll(imageReferencePattern, '').trim().isNotEmpty) {
+        _askTitle(turn.text);
+      }
+    }
     // dsh takes one prompt at a time (F12): a message sent while one runs
     // waits here, apart from the conversation, until that turn ends.
     if (_translator.inFlight || _awaiting != null) {

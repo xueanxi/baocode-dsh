@@ -608,6 +608,7 @@ class _Rig {
     sessions: MemoryDshSessionStore(),
     route: testDshRoute,
     credentials: credentials ?? (_) async => true,
+    titleAsker: (_, {route, cancel}) async => null,
   );
 }
 

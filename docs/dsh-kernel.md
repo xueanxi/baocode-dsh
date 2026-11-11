@@ -52,7 +52,7 @@ BAOCODE_DSH_PATH=/path/to/dsh/lib/bin.js node tool/dsh_smoke.mjs
 | dsh | 需要本机装好 `@deepseek-ai/dsh`。BaoCode **不安装、不升级、不打包** dsh，只定位已有的那一份，所以 `dsh web` 与 BaoCode 跑的是同一份安装。 |
 | 共享 `~/.dsh` | 会话、模型路由、凭据都在 `~/.dsh`（`DSH_HOME` 生效）；BaoCode 补丁要固定的路由来自本机的 `dsh/dsh.env`（§7），不是源码。BaoCode 在 dsh web 里能看到同一批会话；反过来 dsh web 也能看到 BaoCode 建的会话。 |
 | 不写 `~/.dsh` | BaoCode 自己不写 `~/.dsh` 下任何文件：不跑 `plugin`、不跑 `--dump-config`，不动 profiles/sessions/projcache。会话文件是 **dsh 自己**在建会话时写的（`session.v4.jsonl.zstd`），与 dsh web 的行为一致。 |
-| BaoCode 自己的会话账本 | dsh 的 `session/list` 没有标题与时间、`session/resume` 不回放历史，所以 BaoCode 把**自己开过的**会话记在应用数据目录的 `dsh/sessions/`（id、cwd、标题、时间与对话条目）。重启后侧栏据此列出、点开读回；在 dsh web 里开始的会话不在其中。 |
+| BaoCode 自己的会话账本 | dsh 的 `session/list` 没有标题与时间、`session/resume` 不回放历史，所以 BaoCode 把**自己开过的**会话记在应用数据目录的 `dsh/sessions/`（id、cwd、标题、时间与对话条目）。标题先取首条消息的第一行，随后由 dsh 自己的一次性问答起一个短语（§5.10、§7）；重启后侧栏据此列出、点开读回；在 dsh web 里开始的会话不在其中。 |
 | 凭据 | 补丁只写路由文件里的 `apiKeyEnv`（本机示例 `STEPCODEV2_API_KEY`）这个名字，不写 key；BaoCode 也不读 `~/.dsh/.credentials.yaml` 的**值**，预检只看 `refs:` 下的 key 名。没有路由文件时不声明路由，也就不预检。 |
 | 项目目录 | 进程的 cwd 与 `session/new` 的 `cwd` 都是项目目录。会话头里的 cwd 就是本会话 `workspace-write` 的边界（F5）。 |
 | 版本 | 版本从被定位包的 `package.json` 读（F3；ACP 桥自报的 `agentInfo.version` 恒为 `"0.0.1"`，不是 dsh 版本）。低于验证版本只发一条会话内提醒，仍然可用。 |
@@ -174,14 +174,14 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 8. **跨内核的“上次选择”按 kind 全局保存**：不同内核共用一份按 kind（model/effort/permission）记的选择；DSH 会丢弃它不认识的 id（例如 Claude 的 model id），所以切内核后可能要重选档位/模型。
 9. **用量进 BaoCode 的账本**：`usage_update` 只用来刷新工具栏的上下文占用与窗口大小；每次模型调用的 **tokens** 由补丁挂的 `baocode-usage-bridge` 从 dsh 的 `assistant/message` 事件取出，经本机端点记入设置→用量，数值与供应商报的一致。金额是估算：本机路由的 model 没在设置→用量里设价时，若它在内置估算表里（目前是 `deepseek-v4.1-flash`）就用 DeepSeek 公开价，否则仍显示未定价；设了价就用你的。dsh 仍不声明 `ReportsUsage`（那是账号额度，不是每笔调用）。
 10. **切视图回来要重新握手（约 6 秒）**：视图全关时内核释放进程，下次进入重新定位、起进程、`initialize`，再 `session/resume`。这 6 秒是 dsh 的启动时间（F20），不是卡死。
-11. 其他不做的：token 级流式、会话内切换档位、fork/重命名/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1；编辑用户消息同理，见 §4.2）。
+11. 其他不做的：token 级流式、会话内切换档位、fork/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1；编辑用户消息同理，见 §4.2）。改名是 BaoCode 账本上的（`RenamesSession`），不走 ACP 的 `session/rename`（F18）。
 12. 本设计的补丁只声明 `model`，没有声明 `reasoningEffort`（F6）：dsh 不报 `reasoning_effort`，所以思考强度选择器不显示（内核实现了 `SelectsEffort`，选项为空时 UI 自然不显示）。
 13. 上下文窗口在 dsh 报告前按路由文件的 `context_window` 显示（没写或没有路由文件时用 `DshRoute.defaultContextWindow`，200000），`usage_update.size` 到达后覆盖。
 14. 版本低于 `0.2.0-rc.2` 时只发一条 warning（每个会话一次），不阻止使用；`unknown` 版本不做比较、不提醒。
 15. 图片：能力为 false 时剥掉并发一次 warning；能力为 true 时图片随消息放在文本前。握手未完成时能力未知，带图的一轮等握手（TurnStarted 因此晚一点出现；界面上粘贴图片要先知道能力，所以这是罕见路径）；提示与消息都在同一轮内，提示不会跑到 TurnStarted 前面。能力随进程走，`release` 或进程退出后复位为未知。
 16. Windows 上崩溃/强杀残留的 dsh 进程无法可靠回收；正常退出会 `stopDshProcesses`，启动时会 `reapDshProcesses`，但崩溃这种场景不承诺。
 17. 会话的 `cwd` 是它的 workspace 边界（F5）；项目挪了位置，旧会话 resume 会因 `cwd does not match` 失败（显示为轮次错误），只能新开对话。
-18. dsh 的 `session/list` 只有 `{sessionId, cwd}`、没有标题与时间（F17），所以列表与标题来自 BaoCode 自己的账本（§2、规格 §5.13），不来自 dsh。
+18. dsh 的 `session/list` 只有 `{sessionId, cwd}`、没有标题与时间（F17），所以列表与标题来自 BaoCode 自己的账本（§2、规格 §5.13），不来自 dsh。标题先取首行，再由 dsh 的一次性问答（`askDsh`）生成；这条路不把 DSH 对话文本发给 Claude Haiku。
 19. 线程记住的内核在当前项目不可用时（例如把 DSH 对话挪进多文件夹工作区，或挪到远端项目），会话会以当前第一个可用的内核打开（通常是 Claude Code），不报错；一个都不可用时才保留原内核。这是通用的线程恢复行为（`ChatSession._availableKernel`），不是 DSH 特有。
 20. **斜杠菜单只读 dsh 的默认 skill 根**（§2 的「斜杠菜单里的 skill」）：不读用户 profile 里的 `customSkillDirs`，对话开着时也不热更新，下一次打开对话（`prepare()`）才重读。放进 `~/.dsh/skills` 的 skill，重开或重进对话即可见。
 21. 选项提问依赖 dsh 的内部接缝 `user-questions/request` 与 `dsh-tool-ask-user`（验证于 0.2.0-rc.2）。dsh 换掉这个事件名或包名时，工具会静默不在或调用失败；桥接文件随应用一起更新，不写进 `~/.dsh`。另外，dsh 的环境里有端点 token，它自己跑的 shell 命令理论上能读到并伪造一次提问（本机开发工具的威胁模型，不承诺防御）。
@@ -261,7 +261,7 @@ context_window=512000
 
 ### 应用自己问的一句话（`ask.patch.yml`）
 
-「生成提交消息」「输入框的提示词增强」这类**应用自己问**的一句话（不是对话的一轮），在项目内核是 DSH 时由 dsh 回答，不再走 Claude Code 的 Haiku：一次
+「生成提交消息」「输入框的提示词增强」「DSH 新会话的标题」这类**应用自己问**的一句话（不是对话的一轮），在项目内核是 DSH 时由 dsh 回答，不再走 Claude Code 的 Haiku：一次
 
 ```bash
 node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
@@ -273,7 +273,7 @@ node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
 - 进程结束整目录删掉，所以 **`~/.dsh/sessions` 里不会多出会话**——这条是硬要求，不是优化。
 - 提问的 cwd 也是那个临时目录：dsh 的沙箱根在那里，`DSH_PERMISSION_MODE=read-only` 由 BaoCode 写上——没有人守着审批，越界请求会被拒（F23）。
 - 一次约 6 秒（实测 6.3 s：起 node + 一次模型调用）；取消或超时（2 分钟）连同进程树一起结束。
-- 提问方有两个：`IdeCommitMessage`（「生成提交消息」）与 `polishComposerText`（输入框的提示词增强，`kernel:` 取会话的内核）。两者都只在项目内核是 DSH 时改问 dsh，回复的清洗、判据各自不变。
+- 提问方有三个：`IdeCommitMessage`（「生成提交消息」）、`polishComposerText`（输入框的提示词增强，`kernel:` 取会话的内核）与 `DshKernel` 的新会话标题（`dsh_title.dart`，首条消息后一次；用户改名会取消它）。回复的清洗、判据各自不变。
 - 内核是 Claude Code 的项目**仍然走 Claude Code 的 Haiku**；没有跨内核回退：DSH 答不上就照它的话报出来（路由要的 ref 缺失时预检直接说，不起进程）。
 
 ## 8. 排障
@@ -387,6 +387,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 让 agent 用 `ask_user_question` 问一个选择题：面板出现，`1-9` 可选，选完本轮继续并复述所选
 - [ ] 面板上按 Esc 跳过：本轮继续，dsh 收到空选择；轮次结束或切走视图不留下悬空面板
 - [ ] 中途停止可用，停止后还能继续对话
+- [ ] 新对话发出第一条消息后，标题从首行变成 dsh 生成的短语；双击标题可改名，改后不再被生成的标题覆盖
 - [ ] 切换模型立即生效，不重启；dsh 没报思考强度时没有该选项
 - [ ] 第一次回复前上下文窗口显示 512K，之后随 `usage_update` 变化
 - [ ] 设置 → 用量里能看到这次 DSH 对话的调用：输入/输出/缓存 tokens 与 dsh 的账一致，金额有估算价
@@ -452,7 +453,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 测试：
 
 - `test/kernel/dsh/`（`locate_test.dart`、`route_test.dart`、`patch_test.dart`、`transport_test.dart`、`ask_test.dart`、`skills_test.dart`）：定位（含开头的 `~` 展开）、路由文件的解析与定位、补丁（ACP 与一次性问答两份）、传输与问答的纯函数和临时目录测试、stderr 脱敏，以及 skill 的 frontmatter、项目根与 rank 合并；
-- `test/kernel/dsh_kernel_test.dart`：握手、会话时机、模型、健康、权限锁定、release/resume、能力随进程复位、`prepare()` 后 `/` 菜单来自 skill 根并带文件路径、编辑时的标记与界面文本；
+- `test/kernel/dsh_kernel_test.dart`：握手、会话时机、首条消息由 dsh 起标题并写账本、用户改名压过迟到的标题、模型、健康、权限锁定、release/resume、能力随进程复位、`prepare()` 后 `/` 菜单来自 skill 根并带文件路径、编辑时的标记与界面文本；
+- `test/kernel/dsh/title_test.dart`：一次性标题的提问文本与清洗、取消/失败时不写标题；
 - `test/kernel/dsh_turn_test.dart`：一轮的事件顺序（含带图时提示在同一轮内、握手前发图等握手）、文本、思考、工具、usage、错误、取消；
 - `test/kernel/dsh_approval_test.dart`：审批的挂起、三种应答线形、理由回退、迟到应答；
 - `test/kernel/dsh_question_server_test.dart`：桥插件文件的写入与不重写、端点的 token 校验、未知问题 404；
@@ -462,7 +464,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - `test/e2e_dsh_real_test.dart`：`-t dsh-e2e` 才跑，真 dsh 调 `ask_user_question`，自动替用户答 Apple，断言工具结果与回复；
 - `test/kernel/dsh_integration_test.dart`：跨票回归，prepare → 首条消息建会话 → 工具+审批 → 下一轮 → 出错轮 → release → prepare/resume → dispose；
 - `test/kernel/dsh_restart_test.dart`：重启后再续（resume 而非 new）、历史与标题的读写、文件账本与目录；
-- `test/kernel/dsh_capabilities_test.dart`、`dsh_notices_test.dart`：能力声明与提示去重、凭据预检；
+- `test/kernel/dsh_capabilities_test.dart`、`dsh_notices_test.dart`：能力声明与提示去重、凭据预检、手动总结标题走内核自己的 `titleFor` 而不是应用 titler；`test/workspace_test.dart` 追加：DSH 新对话由 dsh 自己起标题，应用 titler 不被调用；
 - `test/kernel/dsh_bash_test.dart`：Git Bash 的发现顺序、跳过 WSL、无 git 时不跑 git、POSIX 返回 null；
 - `test/kernel_ui_test.dart`：选择器、权限档位锁定、图片开关等界面接缝；
 - `test/ide/git/commit_message_test.dart`（追加）：内核是 DSH 时问 dsh 并清洗回复、dsh 的错误原话上报、取消映射成取消；

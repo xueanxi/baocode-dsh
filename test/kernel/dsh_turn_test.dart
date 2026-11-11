@@ -454,6 +454,7 @@ class _Rig {
     // the conversation ahead of the turn.
     route: testDshRoute,
     credentials: (_) async => true,
+    titleAsker: (_, {route, cancel}) async => null,
   )..events.listen(_receive);
 
   final List<KernelEvent> events = [];

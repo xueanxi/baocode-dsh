@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -12,6 +13,7 @@ import 'package:baocode/kernel/dsh/dsh_notices.dart';
 import 'package:baocode/kernel/dsh/dsh_patch.dart';
 import 'package:baocode/kernel/dsh/dsh_route.dart';
 import 'package:baocode/kernel/dsh/dsh_sessions.dart';
+import 'package:baocode/kernel/dsh/dsh_title.dart';
 import 'package:baocode/kernel/dsh/dsh_transport.dart';
 import 'package:baocode/kernel/dsh/dsh_usage_bridge.dart';
 import 'package:baocode/kernel/dsh/dsh_usage_server.dart';
@@ -308,6 +310,65 @@ void main() {
       });
     },
   );
+
+  test('the first message is titled by dsh, and the title kept', () async {
+    final dsh = _FakeDsh();
+    final sessions = MemoryDshSessionStore();
+    final asked = <String>[];
+    final kernel = dsh.kernel(
+      sessions: sessions,
+      titleAsker: (message, {route, cancel}) async {
+        asked.add(message);
+        return 'Composer change';
+      },
+    );
+    final events = _listen(kernel);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+
+    kernel.send(KernelTurn(id: 'turn-1', text: 'Change the composer'));
+    await settled(() => events.whereType<SessionRenamed>().isNotEmpty);
+    expect(events.whereType<SessionRenamed>().last.title, 'Composer change');
+    expect(asked, ['Change the composer']);
+
+    await settled(() => events.whereType<TurnEnded>().isNotEmpty);
+    List<DshSession> kept = const [];
+    for (var i = 0; i < 500; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+      kept = await sessions.sessions();
+      if (kept.length == 1 && kept.single.title == 'Composer change') break;
+    }
+    expect(kept.single.title, 'Composer change');
+  });
+
+  test('a name the user gives stands over a title dsh gives later', () async {
+    final dsh = _FakeDsh();
+    final sessions = MemoryDshSessionStore();
+    final generated = Completer<String?>();
+    final kernel = dsh.kernel(
+      sessions: sessions,
+      titleAsker: (_, {route, cancel}) => generated.future,
+    );
+    final events = _listen(kernel);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+
+    kernel.send(KernelTurn(id: 'turn-1', text: 'Fix the login test'));
+    kernel.rename('Login fix');
+    expect(events.whereType<SessionRenamed>().last.title, 'Login fix');
+
+    generated.complete('Generated title');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(events.whereType<SessionRenamed>().last.title, 'Login fix');
+    expect(
+      events.whereType<SessionRenamed>().map((event) => event.title),
+      isNot(contains('Generated title')),
+    );
+
+    await settled(() => events.whereType<TurnEnded>().isNotEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect((await sessions.sessions()).single.title, 'Login fix');
+  });
 
   test(
     'the models dsh lists, grouped by provider, values as dsh writes them',
@@ -1469,6 +1530,8 @@ class _FakeDsh {
     DshCredentialCheck? credentials,
     DshRoute? route = testDshRoute,
     bool realUsage = false,
+    DshSessionStore? sessions,
+    DshTitleAsker? titleAsker,
   }) => DshKernel(
     KernelRegistry.dsh,
     KernelContext(
@@ -1479,9 +1542,10 @@ class _FakeDsh {
     start: start,
     locate: locate,
     environment: () async => environment,
-    sessions: MemoryDshSessionStore(),
+    sessions: sessions ?? MemoryDshSessionStore(),
     route: route,
     credentials: credentials ?? (_) async => true,
+    titleAsker: titleAsker ?? (_, {route, cancel}) async => null,
     // A socket per test is not the kernel's: the usage test takes the real
     // endpoint, and the others a stand-in that only names one.
     usageServer: realUsage ? null : _fakeUsageServer,
