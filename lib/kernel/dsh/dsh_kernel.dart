@@ -21,6 +21,7 @@ import 'dsh_locate.dart';
 import 'dsh_notices.dart';
 import 'dsh_patch.dart';
 import 'dsh_route.dart';
+import 'dsh_route_plan.dart';
 import 'dsh_question_server.dart';
 import 'dsh_questions.dart';
 import 'dsh_sessions.dart';
@@ -83,20 +84,26 @@ class DshKernel
     DshUsageServerStarter? usageServer,
     this._credentials,
     DshRoute? route,
+    DshRoutePlan? plan,
     DshTitleAsker? titleAsker,
   }) : _environment = environment ?? ClaudeEnvironment.of,
        _titleAsker = titleAsker ?? askDshTitle,
        _givenRoute = route,
+       _givenPlan = plan,
        _sessions = sessions ?? DshSessionStore.file(),
        _questionServerStart = questionServer ?? startDshQuestionServer,
        _usageServerStart = usageServer ?? startDshUsageServer,
        _sessionId = _context.resume?.id,
        _title = _context.resume?.title ?? '' {
-    _translator = DshTranslator(
-      emit: emit,
-      nextSeq: () => nextSeq,
-      options: _applyOptions,
-    )..contextWindow = route?.contextWindow ?? DshRoute.defaultContextWindow;
+    _translator =
+        DshTranslator(
+            emit: emit,
+            nextSeq: () => nextSeq,
+            options: _applyOptions,
+          )
+          ..contextWindow =
+              (route ?? plan?.route)?.contextWindow ??
+              DshRoute.defaultContextWindow;
     _approvals = DshApprovals(
       emit: emit,
       nextSeq: () => nextSeq,
@@ -143,6 +150,10 @@ class DshKernel
   /// (`dsh_route.dart`), so a file written or removed between two starts is
   /// what the next one runs on.
   final DshRoute? _givenRoute;
+
+  /// The plan a test gave, when the app's own route is what it exercises:
+  /// what Settings → Models would give, and the environment carrying it.
+  final DshRoutePlan? _givenPlan;
 
   /// Where the conversations this kernel starts are kept, for the sidebar
   /// and for reading back (see [DshCatalog]).
@@ -635,14 +646,18 @@ class DshKernel
       // both whether there is a Git Bash to turn on and where DSH_HOME is,
       // which the patch checks the plugin against.
       environment = await _environment();
-      // This machine's route, unless a test gave one: no file means dsh runs
-      // on the model its own profile is configured with.
-      final route =
-          _givenRoute ??
-          await DshRoute.load(
-            directory: DataDirectory.current.dshDir,
-            environment: environment,
-          );
+      // This machine's route: the model Settings → Models picks, else its own
+      // file, unless a test gave one. No route at all means dsh runs on the
+      // model its own profile is configured with.
+      final plan =
+          _givenPlan ??
+          (_givenRoute != null
+              ? DshRoutePlan(route: _givenRoute)
+              : await DshRoutePlan.load(
+                  directory: DataDirectory.current.dshDir,
+                  environment: environment,
+                ));
+      final route = plan.route;
       _translator.contextWindow =
           route?.contextWindow ?? DshRoute.defaultContextWindow;
       final bridge = await _openAskBridge();
@@ -667,12 +682,13 @@ class DshKernel
         editBridge: editBridge,
         dshHome: _dshHomeOf(environment),
       );
-      final launched = {...environment};
+      final launched = {...environment, ...plan.environment};
       if (bridge != null) launched.addAll(bridge.environment);
       if (usage != null) launched.addAll(usage.environment);
       // Said before it starts, so that the first turn's failure is not the
-      // first word about it (§5.3).
-      if (route != null) await _checkCredential(route.apiKeyEnv, environment);
+      // first word about it (§5.3). What the app's own route needs is in
+      // [launched], the proxy's token.
+      if (route != null) await _checkCredential(route.apiKeyEnv, launched);
       transport = await _start(
         DshLaunch(
           cwd: _cwd,

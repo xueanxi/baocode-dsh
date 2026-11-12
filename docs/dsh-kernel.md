@@ -29,7 +29,7 @@ DSH（DeepSeek Harness）是 BaoCode 的第二个 agent 内核，与 Claude Code
 ## 1. 快速开始
 
 1. 装 dsh：`npm i -g @deepseek-ai/dsh`（本适配器按 `0.2.0-rc.2` 验证）。
-2. 模型由 dsh 自己的 profile 决定：在 dsh web 里配好模型和它的 key 即可。要在本机固定一个路由（测试用），写一份 `dsh/dsh.env`（见 §7）；**代码里不写死任何 provider 或 model**。
+2. 在 **设置 → 模型 → 「DSH 模型」** 里选一个上游与模型：DSH 的对话、提交消息与标题都跑在它上面，key 由 app 在启动时交给 dsh（不落盘）。不选则 DSH 用它自己的配置——`dsh web` 里配的凭据、或本机 `dsh/dsh.env` 的路由（见 §7）；**代码里不写死任何 provider 或 model**。
 3. BaoCode 里新建对话，内核选 **DSH**，输入任务。
 4. 第一次发消息时才会在 `~/.dsh` 里建会话；发之前先把权限档位选好（见 §3）。
 
@@ -50,10 +50,10 @@ BAOCODE_DSH_PATH=/path/to/dsh/lib/bin.js node tool/dsh_smoke.mjs
 | 事项 | 说明 |
 |---|---|
 | dsh | 需要本机装好 `@deepseek-ai/dsh`。BaoCode **不安装、不升级、不打包** dsh，只定位已有的那一份，所以 `dsh web` 与 BaoCode 跑的是同一份安装。 |
-| 共享 `~/.dsh` | 会话、模型路由、凭据都在 `~/.dsh`（`DSH_HOME` 生效）；BaoCode 补丁要固定的路由来自本机的 `dsh/dsh.env`（§7），不是源码。BaoCode 在 dsh web 里能看到同一批会话；反过来 dsh web 也能看到 BaoCode 建的会话。 |
+| 共享 `~/.dsh` | 会话与凭据在 `~/.dsh`（`DSH_HOME` 生效）；模型路由来自设置 → 模型，或本机的 `dsh/dsh.env`（§7），都不是源码。BaoCode 在 dsh web 里能看到同一批会话；反过来 dsh web 也能看到 BaoCode 建的会话。 |
 | 不写 `~/.dsh` | BaoCode 自己不写 `~/.dsh` 下任何文件：不跑 `plugin`、不跑 `--dump-config`，不动 profiles/sessions/projcache。会话文件是 **dsh 自己**在建会话时写的（`session.v4.jsonl.zstd`），与 dsh web 的行为一致。 |
 | BaoCode 自己的会话账本 | dsh 的 `session/list` 没有标题与时间、`session/resume` 不回放历史，所以 BaoCode 把**自己开过的**会话记在应用数据目录的 `dsh/sessions/`（id、cwd、标题、时间与对话条目）。标题先取首条消息的第一行，随后由 dsh 自己的一次性问答起一个短语（§5.10、§7）；重启后侧栏据此列出、点开读回；在 dsh web 里开始的会话不在其中。 |
-| 凭据 | 补丁只写路由文件里的 `apiKeyEnv`（本机示例 `STEPCODEV2_API_KEY`）这个名字，不写 key；BaoCode 也不读 `~/.dsh/.credentials.yaml` 的**值**，预检只看 `refs:` 下的 key 名。没有路由文件时不声明路由，也就不预检。 |
+| 凭据 | 设置 → 模型选的 DSH 模型，上游 key 留在 app 里；交给 dsh 的只是本地模型代理的 loopback token（环境变量 `BAOCODE_DSH_PROXY_TOKEN`，每次运行重新生成）。路由文件那条只写 `apiKeyEnv` 的名字（本机示例 `STEPCODEV2_API_KEY`），不写 key；BaoCode 不读 `~/.dsh/.credentials.yaml` 的**值**，预检只看名字。没有路由时 dsh 用自己 profile 的模型与凭据，也就不预检。 |
 | 项目目录 | 进程的 cwd 与 `session/new` 的 `cwd` 都是项目目录。会话头里的 cwd 就是本会话 `workspace-write` 的边界（F5）。 |
 | 版本 | 版本从被定位包的 `package.json` 读（F3；ACP 桥自报的 `agentInfo.version` 恒为 `"0.0.1"`，不是 dsh 版本）。低于验证版本只发一条会话内提醒，仍然可用。 |
 | 图片 | 以 `initialize` 的 `promptCapabilities.image` 为准；为 false 时发送前剥掉图片并发一条警告，不会把模型没看到的图片当成已发送。握手还没回来时这条能力是「不知道」（`supportsImages` 为 false）：带图的一轮会等握手结束再决定，因此这一轮的 `TurnStarted` 会晚几秒。这在界面上是罕见路径——粘贴图片本身就要求能力已知，所以通常只出现在直接调用内核的代码里（测试、集成）。 |
@@ -176,7 +176,7 @@ dsh 自带的 `ask_user_question` 在 ACP profile 里默认**用不了**：base 
 10. **切视图回来要重新握手（约 6 秒）**：视图全关时内核释放进程，下次进入重新定位、起进程、`initialize`，再 `session/resume`。这 6 秒是 dsh 的启动时间（F20），不是卡死。
 11. 其他不做的：token 级流式、会话内切换档位、fork/后台任务/MCP 管理/计划模式、编辑监听与 diff review、自动安装或升级 dsh、把 BaoCode 自有工具接进 dsh（**选项提问是唯一的例外**：它靠一个 profile 内的小桥插件，不是把进程内工具搬过去，见 §4.1；编辑用户消息同理，见 §4.2）。改名是 BaoCode 账本上的（`RenamesSession`），不走 ACP 的 `session/rename`（F18）。
 12. 本设计的补丁只声明 `model`，没有声明 `reasoningEffort`（F6）：dsh 不报 `reasoning_effort`，所以思考强度选择器不显示（内核实现了 `SelectsEffort`，选项为空时 UI 自然不显示）。
-13. 上下文窗口在 dsh 报告前按路由文件的 `context_window` 显示（没写或没有路由文件时用 `DshRoute.defaultContextWindow`，200000），`usage_update.size` 到达后覆盖。
+13. 上下文窗口在 dsh 报告前按路由的 `context_window` 显示（app 路由取模型自己的窗口；没有路由文件时用 `DshRoute.defaultContextWindow`，200000），`usage_update.size` 到达后覆盖。
 14. 版本低于 `0.2.0-rc.2` 时只发一条 warning（每个会话一次），不阻止使用；`unknown` 版本不做比较、不提醒。
 15. 图片：能力为 false 时剥掉并发一次 warning；能力为 true 时图片随消息放在文本前。握手未完成时能力未知，带图的一轮等握手（TurnStarted 因此晚一点出现；界面上粘贴图片要先知道能力，所以这是罕见路径）；提示与消息都在同一轮内，提示不会跑到 TurnStarted 前面。能力随进程走，`release` 或进程退出后复位为未知。
 16. Windows 上崩溃/强杀残留的 dsh 进程无法可靠回收；正常退出会 `stopDshProcesses`，启动时会 `reapDshProcesses`，但崩溃这种场景不承诺。
@@ -242,9 +242,14 @@ TurnEnded(turnId, interrupted:, worked:)
 - 原子写；POSIX 上目录 0700、文件 0600（Windows 继承用户目录 ACL）。**不要手改**：下次启动会按内容重建，改了也会被覆盖。
 - `--patch` 必须传绝对路径：相对路径按被启动进程的 cwd 解析（F21）。补丁是**可执行配置**，id 命中的条目会整体替换其 `config`（不深合并），已有 id 的 `name` 被忽略；引用了没安装的插件会被**静默忽略**，进程照常启动（F21）。
 
-### 模型路由文件（`dsh/dsh.env`）
+### 模型路由：设置里选的，或 `dsh/dsh.env`
 
-- 位置：应用数据目录下的 `dsh/dsh.env`，与补丁同目录（Windows `%APPDATA%\baocode\dsh\dsh.env`；macOS `~/Library/Application Support/baocode/dsh/dsh.env`；Linux `~/.config/baocode/dsh/dsh.env`）。`BAOCODE_DSH_ENV` 可指向别的文件（脚本、测试用）；指了却不存在会直接报错，不回退。
+两个来源，`DshRoutePlan` 按顺序取一个：
+
+1. 设置 → 模型 → **「DSH 模型」**（`models.dsh`）：路由按选中的上游与模型现算，走 app 自己的本地模型代理；上游 key 留在 app 里，交给 dsh 的只有 loopback token（环境变量 `BAOCODE_DSH_PROXY_TOKEN`）。这是正常用法，改了设置后**下一通对话**生效。
+2. `dsh/dsh.env`：本机固定路由的老办法（脚本、测试、不想用 app 的上游时）。它的位置、格式与限制见下；设置里选了模型时它不再生效。
+
+- 位置：应用数据目录下的 `dsh/dsh.env`，与补丁同目录（Windows `%APPDATA%\baocode\dsh\dsh.env`；macOS `~/Library/Application Support/baocode/dsh/dsh.env`；Linux `~/.config/baocode/dsh/dsh.env`）。`BAOCODE_DSH_ENV` 可指向别的文件（脚本、测试用），**指名的文件优先于设置里选的模型**；指了却不存在会直接报错，不回退。
 - 格式与 `.env` 相同：一行一个 `KEY=value`，`#` 起注释，值可用引号。必填 `provider`、`base_url`、`api_key_env`、`model`；可选 `context_window`（缺省 200000）。本机测试用的一份：
 
 ```text
@@ -255,7 +260,7 @@ model=deepseek-v4.1-flash
 context_window=512000
 ```
 
-- **没有这个文件就是没有路由**：补丁不写 `llm-pi-ai`、不写 `acp.config`，dsh 用它自己 profile 里的模型——也就是 dsh web 里配的那一套。对话与一次性问答都按这条走。
+- **设置里没选、也没有这个文件，就是没有路由**：补丁不写 `llm-pi-ai`、不写 `acp.config`，dsh 用它自己用 profile 里的模型——注意那是 **acp profile 的** `agent-default-model`（`deepseek-official` / `deepseek-flash`），不是 `dsh web` 里选的那个：`dsh web` 的模型选择写在 web profile 的补丁里，两个 profile 不共享；共享的只有凭据库。所以「在 dsh web 里配好模型」并不足以让 BaoCode 的 DSH 对话换个模型，key 却是共享的。
 - 文件存在但不可用（缺键、认不得的键、`base_url` 不是 http(s)、`context_window` 不是正数、读不了）→ 启动失败，健康态详情带**文件路径与行号**，不回退到 dsh 的配置。
 - 文件里只有 ref 名，没有 key：密钥仍留在 `~/.dsh`，由 dsh 自己读（F24）。BaoCode 既不写也不删这个文件。
 
@@ -269,7 +274,7 @@ node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
 
 任务写在 stdin，答案取最后一个 `final` 事件的 `text`——`thinking`（模型的思考）与 `status`（步骤）都丢掉。
 
-- 补丁由 `DshPatch.askContent` **每次提问现写**，落在本次运行的临时目录里（`<系统临时目录>/baocode-dsh-ask-<pid>-<n>/ask.patch.yml`）：路由与 ACP 那份读**同一份 `dsh.env`**（没有就都不声明），`agent-default-model` 指到它，`session-persistence-jsonl.root` 指到该目录下的 `sessions/`，并关掉 `session-title-llm`（起标题是又一次模型请求，这里没人看标题）。
+- 补丁由 `DshPatch.askContent` **每次提问现写**，落在本次运行的临时目录里（`<系统临时目录>/baocode-dsh-ask-<pid>-<n>/ask.patch.yml`）：路由与 ACP 那份是**同一条**（设置里选的模型，或 `dsh.env`），`agent-default-model` 指到它，`session-persistence-jsonl.root` 指到该目录下的 `sessions/`，并关掉 `session-title-llm`（起标题是又一次模型请求，这里没人看标题）。
 - 进程结束整目录删掉，所以 **`~/.dsh/sessions` 里不会多出会话**——这条是硬要求，不是优化。
 - 提问的 cwd 也是那个临时目录：dsh 的沙箱根在那里，`DSH_PERMISSION_MODE=read-only` 由 BaoCode 写上——没有人守着审批，越界请求会被拒（F23）。
 - 一次约 6 秒（实测 6.3 s：起 node + 一次模型调用）；取消或超时（2 分钟）连同进程树一起结束。
@@ -301,7 +306,11 @@ node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
 
 ### 缺凭据
 
-会话里出现 error 提示：`dsh has no credential for <路由文件的 api_key_env>; add it in dsh web (Models) or set the environment variable.`（本机示例是 `STEPCODEV2_API_KEY`）。这不是启动失败，进程照常起，每轮会以 `MISSING_CREDENTIAL: …` 失败。修法：在 **dsh web → Models** 里给该 provider 写入 key，或用环境变量提供同名 ref。BaoCode 不复制、不读取 key 的值。
+会话里出现 error 提示：`dsh has no credential for <路由的 api_key_env>; add it in dsh web (Models) or set the environment variable.` 这不是启动失败，进程照常起，每轮会以 `MISSING_CREDENTIAL: …` 失败。
+
+- **设置 → 模型 里选了「DSH 模型」**：不该出现这条——token 由 app 在启动时放进环境。若仍出现，看是不是 `BAOCODE_DSH_ENV` 指到了别的路由文件，或 dsh 的日志里代理端口错了。
+- **没有选模型、也没有 `dsh/dsh.env`**：dsh 用它 acp profile 自己的默认模型（`deepseek-official` / `deepseek-flash`），要的是 `DEEPSEEK_API_KEY`。修法三选一：在 **设置 → 模型 → 「DSH 模型」** 里选一个上游（推荐）；在 **dsh web → Models** 里给 DeepSeek 写入 key（共享的是凭据库，不是 web profile 的模型选择）；或在 `~/.dsh/.env` / `~/.zshrc` 里提供 `DEEPSEEK_API_KEY`。
+- **用的是 `dsh/dsh.env` 路由**：它的 `api_key_env` 必须与 `~/.dsh/.credentials.yaml` 的 `refs:` 里的 key **逐字一致**，或在环境里同名存在。改路由名时一起改。BaoCode 不复制、不读取 key 的值。
 
 同一条提示每个会话只说一次（`notice:credential:<ref>`）。
 
@@ -310,7 +319,7 @@ node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
 项目内核是 DSH 时，「生成提交消息」与输入框的「提示词增强」走的是 `headless` 一次性问答（§7）。界面上是一条 error 通知，文本就是 dsh 的话：
 
 - `DSH is not installed…`：与对话那条同样的定位问题（§8「找不到 dsh」）；
-- `dsh has no credential for <路由文件的 api_key_env>…`：预检在起进程之前就说了，没花模型调用；
+- `dsh has no credential for <路由的 api_key_env>…`：预检在起进程之前就说了，没花模型调用；
 - `dsh gave no answer (exit N).`：它退出了却没打印 `final` 事件，常见于路由/额度/模型 id 的问题——文本后面会带 dsh 的 stderr 尾部（已脱敏）；
 - `dsh did not answer within N minutes.`：超时被杀；先看 dsh web 里同一个模型能不能答。
 
@@ -370,6 +379,7 @@ flutter analyze --fatal-infos
 dart format --output=none --set-exit-if-changed <改动的 .dart 文件>
 flutter test test/kernel/dsh_integration_test.dart
 flutter test test/kernel/dsh/ask_test.dart test/kernel/dsh/patch_test.dart
+flutter test test/kernel/dsh/route_plan_test.dart test/settings/models_page_test.dart
 node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 ```
 
@@ -389,7 +399,9 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 中途停止可用，停止后还能继续对话
 - [ ] 新对话发出第一条消息后，标题从首行变成 dsh 生成的短语；双击标题可改名，改后不再被生成的标题覆盖
 - [ ] 切换模型立即生效，不重启；dsh 没报思考强度时没有该选项
-- [ ] 第一次回复前上下文窗口显示 512K，之后随 `usage_update` 变化
+- [ ] 设置 → 模型 → 「DSH 模型」选一个上游后，新对话的模型选择器只有那一个分组，模型都来自它；不用在 dsh 里另配 key
+- [ ] 同一处选回「跟随 DSH 自己的配置」后，新对话回到 dsh 自己的模型（缺 key 时看到的是 dsh 的 `MISSING_CREDENTIAL` 原文）
+- [ ] 第一次回复前上下文窗口是所选模型的窗口（文件路由取 `context_window`，app 路由取模型的），之后随 `usage_update` 变化
 - [ ] 设置 → 用量里能看到这次 DSH 对话的调用：输入/输出/缓存 tokens 与 dsh 的账一致，金额有估算价
 - [ ] 视图切走再回来约 6 秒后可用，会话接着上一轮
 - [ ] 错误轮显示 error 气泡，按钮恢复可用，内核仍是 ready
@@ -426,7 +438,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 |---|---|
 | `lib/kernel/dsh/dsh_locate.dart`、`dsh_locate_io.dart` | 定位 dsh，解析 shim、设置值、平台 npm 全局根，读 `package.json` 版本 |
 | `lib/kernel/dsh/dsh_patch.dart` | 生成/缓存 ACP 补丁，原子写、权限位、bash 两行的条件；`askContent`（一次性问答的补丁） |
-| `lib/kernel/dsh/dsh_route.dart` | 本机路由文件 `dsh/dsh.env`：`.env` 解析、校验、路径与 `BAOCODE_DSH_ENV`；上下文窗口的缺省值 |
+| `lib/kernel/dsh/dsh_route.dart` | 一条路由：provider、endpoint、`apiKeyEnv`、模型与它声明的模型表、`api`；`dsh.env` 的解析、校验、路径与 `BAOCODE_DSH_ENV` |
+| `lib/kernel/dsh/dsh_route_plan.dart` | 路由的来源与优先级：设置 → 模型（经 app 的本地模型代理，token 放环境）→ `dsh/dsh.env` → dsh 自己的；一次性问答共用 |
 | `lib/kernel/dsh/dsh_ask.dart`、`dsh_ask_io.dart` | 一次性问答：`headless` 的 argv、`final` 事件的解析、起进程与收尾（临时目录、会话根、read-only、超时/取消） |
 | `lib/kernel/dsh/dsh_bash.dart` | 找本机 Git 的 `bash.exe`：`BAOCODE_GIT_BASH` → 登录 shell 的 PATH（跳过 WSL 的那份）→ `git --exec-path` 所属 Git → Program Files 里的 Git |
 | `lib/kernel/dsh/dsh_transport.dart`、`dsh_transport_io.dart` | 子进程传输：按行 JSON-RPC、stderr 环（落库前脱敏）、退出消息、进程树收尾与登记 |
@@ -452,7 +465,7 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 
 测试：
 
-- `test/kernel/dsh/`（`locate_test.dart`、`route_test.dart`、`patch_test.dart`、`transport_test.dart`、`ask_test.dart`、`skills_test.dart`）：定位（含开头的 `~` 展开）、路由文件的解析与定位、补丁（ACP 与一次性问答两份）、传输与问答的纯函数和临时目录测试、stderr 脱敏，以及 skill 的 frontmatter、项目根与 rank 合并；
+- `test/kernel/dsh/`（`locate_test.dart`、`route_test.dart`、`route_plan_test.dart`、`patch_test.dart`、`transport_test.dart`、`ask_test.dart`、`skills_test.dart`）：定位（含开头的 `~` 展开）、路由文件的解析与定位、路由来源与优先级（设置里的模型、命名文件、文件回退、代理起不来）、补丁（ACP 与一次性问答两份，含 app 路由的形状与引号）、传输与问答的纯函数和临时目录测试、stderr 脱敏，以及 skill 的 frontmatter、项目根与 rank 合并；
 - `test/kernel/dsh_kernel_test.dart`：握手、会话时机、首条消息由 dsh 起标题并写账本、用户改名压过迟到的标题、模型、健康、权限锁定、release/resume、能力随进程复位、`prepare()` 后 `/` 菜单来自 skill 根并带文件路径、编辑时的标记与界面文本；
 - `test/kernel/dsh/title_test.dart`：一次性标题的提问文本与清洗、取消/失败时不写标题；
 - `test/kernel/dsh_turn_test.dart`：一轮的事件顺序（含带图时提示在同一轮内、握手前发图等握手）、文本、思考、工具、usage、错误、取消；

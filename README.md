@@ -29,7 +29,7 @@ BaoCode has no agent of its own, by design. `dsh` is the agent, with its tools, 
 - **Fast IDE.** An editor, a terminal and Source Control with a commit graph, built in. `dsh` drafts your commit messages. VS Code, IntelliJ, Sublime and Atom keymaps, and language servers.
 - **Your VS Code themes.** The editor, the conversation and the sidebar all follow them.
 - **Skills, MCP servers and more.** Plugins, MCP servers, skills, subagents, rules, commands and hooks in one place, for you or for a single project.
-- **Any model, for Claude Code.** Add an upstream that speaks Anthropic's API, OpenAI's Chat Completions or OpenAI's Responses; a local proxy translates between it and Claude Code. Keys stay in the system keychain.
+- **Any model, for `dsh` and Claude Code.** Add an upstream that speaks Anthropic's API, OpenAI's Chat Completions or OpenAI's Responses; a local proxy translates between it and the agent. Pick the one `dsh` runs on under Settings → Models. Keys stay in the system keychain.
 - **Remote projects over SSH.** The window stays on your machine; files, Git, search, terminals, language servers and Claude Code run on the remote host (Linux, x64 or arm64). `dsh` runs on this machine.
 - **Notifications.** A system notification, a sound and a badge when an agent needs you or finishes. Close the window and the agents keep running in the menu bar or tray.
 - **Updates itself** in the background, or manually, or not at all.

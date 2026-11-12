@@ -628,6 +628,37 @@ void main() {
       expect(ModelProviders.memory().firstModel, isNull);
     });
 
+    test("DSH's model is one of the upstreams here, never Claude Code's own; "
+        'its list is each upstream\'s conversation models', () async {
+      final providers = ModelProviders.memory(
+        providers: [
+          _gateway.copyWith(
+            models: [
+              const ProviderModel(id: 'gpt-5', contextWindow: 400000),
+              const ProviderModel(id: 'mini'),
+              const ProviderModel(id: 'draw', kind: ModelKind.image),
+            ],
+          ),
+        ],
+      );
+      expect(providers.dshModel, isNull);
+      // Claude Code as set up on this machine holds no model DSH could use.
+      await providers.setDshModel('default');
+      expect(providers.dshModel, isNull);
+
+      await providers.setDshModel('@gw/gpt-5');
+      expect(providers.dshModel, '@gw/gpt-5');
+      // Pictures are not a conversation's model, and a provider turned off
+      // offers none.
+      expect(
+        [
+          for (final entry in providers.dshModels)
+            modelRef(entry.provider.id, entry.model.id),
+        ],
+        ['@gw/gpt-5', '@gw/mini'],
+      );
+    });
+
     test('a provider without models offered is not in the picker', () {
       final providers = ModelProviders.memory(
         providers: [

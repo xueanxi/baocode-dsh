@@ -12,6 +12,7 @@ import 'package:baocode/kernel/dsh/dsh_locate.dart';
 import 'package:baocode/kernel/dsh/dsh_notices.dart';
 import 'package:baocode/kernel/dsh/dsh_patch.dart';
 import 'package:baocode/kernel/dsh/dsh_route.dart';
+import 'package:baocode/kernel/dsh/dsh_route_plan.dart';
 import 'package:baocode/kernel/dsh/dsh_sessions.dart';
 import 'package:baocode/kernel/dsh/dsh_title.dart';
 import 'package:baocode/kernel/dsh/dsh_transport.dart';
@@ -95,6 +96,48 @@ void main() {
       expect(patch, contains(DshEditBridge.fileName));
     },
   );
+
+  test("a model picked in Settings → Models starts dsh on the app's proxy, its "
+      'token in the environment', () async {
+    final dsh = _FakeDsh();
+    const plan = DshRoutePlan(
+      route: DshRoute(
+        provider: 'gw',
+        displayName: 'Gateway',
+        baseUrl: 'http://127.0.0.1:4321/p/gw',
+        apiKeyEnv: DshRoutePlan.proxyTokenVariable,
+        api: DshApi.anthropicMessages,
+        model: 'gpt-5',
+        contextWindow: 400000,
+        models: [
+          DshModel(id: 'gpt-5', contextWindow: 400000),
+          DshModel(id: 'mini', contextWindow: 100000),
+        ],
+        viaProxy: true,
+      ),
+      environment: {DshRoutePlan.proxyTokenVariable: 'loopback-token'},
+    );
+    // The route is the plan's, not the test fixture's.
+    final kernel = dsh.kernel(route: null, plan: plan);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+
+    final launch = dsh.launches.single;
+    // The only secret dsh is given answers on loopback: the upstream's key
+    // never leaves the app.
+    expect(
+      launch.environment![DshRoutePlan.proxyTokenVariable],
+      'loopback-token',
+    );
+    expect(kernel.contextWindow, 400000);
+    final patch = File(launch.patchFile).readAsStringSync();
+    expect(patch, contains("api: 'anthropic-messages'"));
+    expect(patch, contains("baseURL: 'http://127.0.0.1:4321/p/gw'"));
+    expect(patch, contains("          - id: 'mini'"));
+    expect(patch, contains("        apiKeyEnv: 'BAOCODE_DSH_PROXY_TOKEN'"));
+    expect(patch, contains('- id: llm-deepseek'));
+    expect(patch, contains("          x-baocode-usage: 'off'"));
+  });
 
   test(
     'the skills dsh would load are the / menu, and a later one joins it',
@@ -628,10 +671,10 @@ context_window=32000
     await settled(() => kernel.health.status == KernelHealthStatus.ready);
 
     final patch = File(dsh.launches.single.patchFile).readAsStringSync();
-    expect(patch, contains('provider: local'));
-    expect(patch, contains('baseURL: http://127.0.0.1:8080/v1'));
-    expect(patch, contains('apiKeyEnv: LOCAL_API_KEY'));
-    expect(patch, contains('model: local-model'));
+    expect(patch, contains("provider: 'local'"));
+    expect(patch, contains("baseURL: 'http://127.0.0.1:8080/v1'"));
+    expect(patch, contains("apiKeyEnv: 'LOCAL_API_KEY'"));
+    expect(patch, contains("model: 'local-model'"));
     expect(kernel.contextWindow, 32000);
   });
 
@@ -1529,6 +1572,7 @@ class _FakeDsh {
     KernelWorkspace? workspace,
     DshCredentialCheck? credentials,
     DshRoute? route = testDshRoute,
+    DshRoutePlan? plan,
     bool realUsage = false,
     DshSessionStore? sessions,
     DshTitleAsker? titleAsker,
@@ -1544,6 +1588,7 @@ class _FakeDsh {
     environment: () async => environment,
     sessions: sessions ?? MemoryDshSessionStore(),
     route: route,
+    plan: plan,
     credentials: credentials ?? (_) async => true,
     titleAsker: titleAsker ?? (_, {route, cancel}) async => null,
     // A socket per test is not the kernel's: the usage test takes the real

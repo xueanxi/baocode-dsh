@@ -4,6 +4,7 @@ import 'package:bao_remote/local.dart' show AppPaths;
 import 'package:path/path.dart' as p;
 
 import '../../platform/data_dir.dart' show writeFileAtomically;
+import '../../usage/usage_capture.dart' show UsageHeaders;
 import 'dsh_locate.dart';
 import 'dsh_route.dart';
 
@@ -73,8 +74,8 @@ abstract final class DshPatch {
     '  inject: [acpAppStartup]',
     if (route != null) ...[
       '  config:',
-      '    provider: ${route.provider}',
-      '    model: ${route.model}',
+      '    provider: ${_quoted(route.provider)}',
+      '    model: ${_quoted(route.model)}',
     ],
     if (withBash) ...['- id: tool-bash', '  disabled: false'],
     if (askBridge != null || usageBridge != null || editBridge != null) ...[
@@ -118,8 +119,8 @@ abstract final class DshPatch {
     if (route != null) ...[
       '- id: agent-default-model',
       '  config:',
-      '    provider: ${route.provider}',
-      '    model: ${route.model}',
+      '    provider: ${_quoted(route.provider)}',
+      '    model: ${_quoted(route.model)}',
     ],
     '- id: system-prompt',
     '  config:',
@@ -139,22 +140,45 @@ abstract final class DshPatch {
 
   /// [route] as a patch entry: written out whole, a patch replacing a
   /// plugin's `config` (F21).
+  ///
+  /// Every value is quoted: a model id or a provider's name comes from the
+  /// user's own settings, and a colon or a bracket in one must not turn the
+  /// patch into something else. A route of the app's own ([DshRoute.viaProxy])
+  /// also quiets dsh's DeepSeek adapters — they would otherwise be listed
+  /// without a key, which is the trap this route exists to close — and tells
+  /// the proxy not to keep the calls (dsh reports their usage itself).
   static List<String> _routeOf(DshRoute route) => [
     '- id: llm-pi-ai',
     "  name: '@deepseek-ai/dsh-llm-pi-ai'",
     '  config:',
     '    providers:',
-    '      ${route.provider}:',
-    '        displayName: ${route.provider}',
-    '        apiKeyEnv: ${route.apiKeyEnv}',
-    '        api: openai-completions',
-    '        baseURL: ${route.baseUrl}',
+    '      ${_quoted(route.provider)}:',
+    '        displayName: ${_quoted(route.displayName ?? route.provider)}',
+    '        apiKeyEnv: ${_quoted(route.apiKeyEnv)}',
+    '        api: ${_quoted(route.api.id)}',
+    '        baseURL: ${_quoted(route.baseUrl)}',
+    if (route.viaProxy) ...[
+      '        headers:',
+      "          ${UsageHeaders.quiet}: 'off'",
+    ],
     '        models:',
-    '          - id: ${route.model}',
-    '            name: ${route.model}',
-    '            contextWindow: ${route.contextWindow}',
-    '            input: [text, image]',
+    for (final model in route.declared) ...[
+      '          - id: ${_quoted(model.id)}',
+      '            name: ${_quoted(model.displayName)}',
+      '            contextWindow: ${model.contextWindow}',
+      '            input: ${model.images ? '[text, image]' : '[text]'}',
+    ],
+    if (route.viaProxy) ...[
+      '- id: llm-deepseek',
+      '  disabled: true',
+      '- id: llm-deepseek-account',
+      '  disabled: true',
+    ],
   ];
+
+  /// [value] as a YAML scalar that is one string whatever it holds: a route's
+  /// name, a model id, a URL.
+  static String _quoted(String value) => "'${value.replaceAll("'", "''")}'";
 
   /// [lines] as the patch file's text, a newline at its end; a YAML tag in it
   /// — a `!!` in a name a machine wrote — throws rather than going in.

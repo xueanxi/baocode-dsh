@@ -21,6 +21,10 @@ abstract final class UsageHeaders {
   /// session Claude Code's process gave itself.
   static const session = 'x-baocode-session';
 
+  /// BaoCode's own: a request whose calls the proxy is not to keep, because
+  /// the client reports their usage itself (dsh does). `off` silences it.
+  static const quiet = 'x-baocode-usage';
+
   /// Claude Code's variable that has it send them to a gateway (what the
   /// proxy is to it).
   static const gatewayHintsVariable = 'CLAUDE_CODE_GATEWAY_HINT_HEADERS';
@@ -35,6 +39,7 @@ abstract final class UsageHeaders {
     contextCompacted,
     toolDurations,
     session,
+    quiet,
   };
 }
 

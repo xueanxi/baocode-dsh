@@ -11,6 +11,7 @@ import 'dsh_locate.dart';
 import 'dsh_notices.dart' show DshCredentials;
 import 'dsh_patch.dart';
 import 'dsh_route.dart';
+import 'dsh_route_plan.dart';
 import 'dsh_path_setting.dart';
 import 'dsh_transport.dart' show DshLaunch;
 import 'dsh_transport_io.dart' show DshRedact;
@@ -52,17 +53,19 @@ Future<String> askDsh(
   Duration timeout = dshAskTimeout,
 }) async {
   final environment = await ClaudeEnvironment.of();
-  final DshRoute? on;
+  final DshRoutePlan plan;
   try {
-    on =
-        route ??
-        await DshRoute.load(
-          directory: DataDirectory.current.dshDir,
-          environment: environment,
-        );
+    plan = route != null
+        ? DshRoutePlan(route: route)
+        : await DshRoutePlan.load(
+            directory: DataDirectory.current.dshDir,
+            environment: environment,
+          );
   } on DshRouteException catch (error) {
     throw DshAskException("DSH's route cannot be used", detail: error.message);
   }
+  final on = plan.route;
+  final started = {...environment, ...plan.environment};
   final DshInstall? dsh;
   try {
     dsh =
@@ -78,7 +81,7 @@ Future<String> askDsh(
     throw const DshAskException(_missing, detail: _where);
   }
   if (on != null) {
-    await _checkCredential(credentials, environment, on.apiKeyEnv);
+    await _checkCredential(credentials, started, on.apiKeyEnv);
   }
   final run = Directory(
     p.join(Directory.systemTemp.path, 'baocode-dsh-ask-$pid-${_asked++}'),
@@ -102,7 +105,7 @@ Future<String> askDsh(
         workingDirectory: run.path,
         environment: {
           ...Platform.environment,
-          ...environment,
+          ...started,
           DshLaunch.permissionModeVariable: 'read-only',
         },
         // The parent environment beside the app's own on Windows, for what

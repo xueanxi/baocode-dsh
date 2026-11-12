@@ -10575,6 +10575,24 @@ abstract class AppLocalizations {
   /// **'Unset, a new session starts with the model last picked.'**
   String get modelsDefaultDescription;
 
+  /// No description provided for @modelsDsh.
+  ///
+  /// In en, this message translates to:
+  /// **'DSH model'**
+  String get modelsDsh;
+
+  /// No description provided for @modelsDshDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The model DSH conversations run on, from the upstreams here: its key is handed to dsh at launch, never written to a file. Unset, dsh uses its own configuration (dsh web, or dsh/dsh.env). A change applies to the next conversation.'**
+  String get modelsDshDescription;
+
+  /// No description provided for @modelsDshOwn.
+  ///
+  /// In en, this message translates to:
+  /// **'DSH\'s own configuration'**
+  String get modelsDshOwn;
+
   /// No description provided for @modelsDefaultLast.
   ///
   /// In en, this message translates to:

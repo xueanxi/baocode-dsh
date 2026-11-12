@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:baocode/models/model_provider.dart';
 import 'package:baocode/models/proxy/model_proxy.dart';
 import 'package:baocode/models/upstream.dart';
+import 'package:baocode/usage/usage_ledger.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// An upstream on this machine: answers each request with [reply], and
@@ -159,6 +160,40 @@ void main() {
     );
     expect(wrong.status, 401);
     expect(upstream.requests, isEmpty);
+  });
+
+  test('a client that reports usage itself is not counted twice', () async {
+    final storage = MemoryUsageStorage();
+    final ledger = UsageLedger(storage);
+    final counting = ModelProxy(
+      provider: (id) => id == provider.id ? provider : null,
+      key: (_) async => 'sk-upstream',
+      findProxy: (_) => 'DIRECT',
+      token: 'tok',
+      usage: () => ledger,
+    );
+    addTearDown(counting.close);
+    final url = Uri.parse(
+      '${(await counting.endpoint('gw')).baseUrl}/v1/messages',
+    );
+    int kept() => storage.lines.values.fold(0, (sum, day) => sum + day.length);
+
+    await post(
+      url,
+      {'model': 'gpt-5', 'stream': true, 'messages': []},
+      headers: {'x-api-key': 'tok'},
+    );
+    ledger.flush();
+    expect(kept(), 1);
+
+    // dsh says its own report is the conversation's: the proxy keeps none.
+    await post(
+      url,
+      {'model': 'gpt-5', 'stream': true, 'messages': []},
+      headers: {'x-api-key': 'tok', 'x-baocode-usage': 'off'},
+    );
+    ledger.flush();
+    expect(kept(), 1);
   });
 
   test('counts tokens itself, as an estimate', () async {

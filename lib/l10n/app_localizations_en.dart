@@ -6515,6 +6515,16 @@ class AppLocalizationsEn extends AppLocalizations {
       'Unset, a new session starts with the model last picked.';
 
   @override
+  String get modelsDsh => 'DSH model';
+
+  @override
+  String get modelsDshDescription =>
+      'The model DSH conversations run on, from the upstreams here: its key is handed to dsh at launch, never written to a file. Unset, dsh uses its own configuration (dsh web, or dsh/dsh.env). A change applies to the next conversation.';
+
+  @override
+  String get modelsDshOwn => 'DSH\'s own configuration';
+
+  @override
   String get modelsDefaultLast => 'Last picked';
 
   @override

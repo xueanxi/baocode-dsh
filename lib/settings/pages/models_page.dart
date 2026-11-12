@@ -341,6 +341,52 @@ class _ModelsSettingsPageState extends State<ModelsSettingsPage> {
     );
   }
 
+  /// The model DSH conversations run on, or DSH's own configuration: the
+  /// agent's model, not one of the app's small jobs'.
+  Widget _dshRow(BuildContext context) {
+    final l10n = context.l10n;
+    final current = _providers.dshModel;
+    final resolved = _providers.resolve(current);
+    final shown = resolved == null
+        ? l10n.modelsDshOwn
+        : '${resolved.$1.name} · ${resolved.$2.displayName}';
+    void set(String? model) => unawaited(_providers.setDshModel(model));
+    final providers = <ModelProvider>[];
+    for (final (:provider, model: _) in _providers.dshModels) {
+      if (!providers.contains(provider)) providers.add(provider);
+    }
+    return SettingsRow(
+      label: l10n.modelsDsh,
+      description: l10n.modelsDshDescription,
+      trailing: SettingsDropdown(
+        current: shown,
+        semanticLabel: l10n.modelsChoiceLabel(l10n.modelsDsh, shown),
+        entries: () => [
+          IdeMenuAction(
+            l10n.modelsDshOwn,
+            checked: current == null,
+            onSelected: () => set(null),
+          ),
+          if (providers.isNotEmpty) const IdeMenuSeparator(),
+          for (final provider in providers)
+            IdeMenuAction(
+              provider.name,
+              checked: parseModelRef(current)?.provider == provider.id,
+              submenu: [
+                for (final model in provider.enabledModels)
+                  if (!model.kind.generatesImages)
+                    IdeMenuAction(
+                      model.displayName,
+                      checked: current == modelRef(provider.id, model.id),
+                      onSelected: () => set(modelRef(provider.id, model.id)),
+                    ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _list(BuildContext context) {
     final l10n = context.l10n;
     // The newest such: one imported later takes the place of one before.
@@ -408,6 +454,7 @@ class _ModelsSettingsPageState extends State<ModelsSettingsPage> {
                 ],
               ),
             ),
+            _dshRow(context),
             _auxiliaryRow(context),
             _imageRow(context),
           ],

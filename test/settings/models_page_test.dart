@@ -225,6 +225,45 @@ void main() {
     expect(find.text('Connection'), findsNothing);
   });
 
+  testWidgets('DSH runs on the model picked here, or its own configuration', (
+    tester,
+  ) async {
+    await providers.save(
+      const ModelProvider(
+        id: 'gw',
+        name: 'Gateway',
+        protocol: ProviderProtocol.openaiChat,
+        baseUrl: 'https://gw.example.com/v1',
+        models: [
+          ProviderModel(id: 'gpt-5', contextWindow: 400000),
+          ProviderModel(id: 'draw', kind: ModelKind.image),
+        ],
+      ),
+    );
+    await pump(tester);
+    expect(find.text('DSH model'), findsOneWidget);
+    expect(find.text("DSH's own configuration"), findsOneWidget);
+
+    await tester.tap(find.text("DSH's own configuration"));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Gateway').last);
+    await tester.pumpAndSettle();
+    // A conversation's models only: pictures are not among them.
+    expect(find.text('draw'), findsNothing);
+    await tester.tap(find.text('gpt-5').last);
+    await tester.pumpAndSettle();
+    expect(providers.dshModel, '@gw/gpt-5');
+    expect(find.text('Gateway · gpt-5'), findsOneWidget);
+
+    // Back to dsh's own, with one pick.
+    await tester.tap(find.text('Gateway · gpt-5'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("DSH's own configuration").last);
+    await tester.pumpAndSettle();
+    expect(providers.dshModel, isNull);
+    expect(find.text("DSH's own configuration"), findsOneWidget);
+  });
+
   testWidgets('on BaoCode\'s own core there is no built-in provider: '
       'neither listed nor offered as the default', (tester) async {
     ClaudeCore.current = () => ClaudeCore.builtin;

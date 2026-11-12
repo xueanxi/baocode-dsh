@@ -4,6 +4,7 @@
 
 import 'codex/codex_service.dart';
 import 'image_api.dart';
+import 'launch_environment.dart' show ProxyEndpoint;
 import 'model_provider.dart';
 import 'model_runtime_stub.dart'
     if (dart.library.io) 'model_runtime_io.dart'
@@ -24,6 +25,13 @@ Future<Map<String, String>> providerLaunchEnvironment(
   ModelProvider provider,
   String model,
 ) => platform.providerLaunchEnvironment(provider, model);
+
+/// Where the app's local model proxy answers for [providerId], started if it
+/// is not yet: its base URL (Anthropic's Messages API under
+/// `/p/<providerId>`) and the token a request carries. The upstream keys stay
+/// in the app; this token is the only one that leaves it.
+Future<ProxyEndpoint> modelProxyEndpoint(String providerId) =>
+    platform.modelProxyEndpoint(providerId);
 
 /// [request]'s pictures, made by [model] (an image model) of [provider]:
 /// the bytes of each (fetched where it answered with a link). Throws

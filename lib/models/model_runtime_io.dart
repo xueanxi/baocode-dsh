@@ -194,6 +194,10 @@ Future<Map<String, String>> providerLaunchEnvironment(
   );
 }
 
+/// Where the app's proxy answers for [providerId], started if it is not yet.
+Future<ProxyEndpoint> modelProxyEndpoint(String providerId) =>
+    _proxy.endpoint(providerId);
+
 Future<void> stopModelProxy() async {
   // What was kept of the calls but not yet written.
   UsageLedger.current.flush();

@@ -261,7 +261,7 @@ class ModelProxy {
       final provider = found.speakingFor(
         parseSuffix('${body['model'] ?? ''}').modelName.trim(),
       );
-      if (!countTokens) {
+      if (!countTokens && _recordsUsage(request)) {
         ledger = _usage?.call();
         if (ledger != null && ledger.enabled) {
           final followed = meter = _meter(
@@ -333,6 +333,12 @@ class ModelProxy {
       if (meter != null) ledger?.end(meter);
     }
   }
+
+  /// Whether this request's calls are kept: a client that reports their usage
+  /// itself says not to, with [UsageHeaders.quiet] (`dsh` does: its own
+  /// report is the conversation's, and keeping both would count it twice).
+  static bool _recordsUsage(HttpRequest request) =>
+      request.headers.value(UsageHeaders.quiet) != 'off';
 
   /// Follows [body]'s request to [provider] for the [UsageLedger].
   UsageMeter _meter(

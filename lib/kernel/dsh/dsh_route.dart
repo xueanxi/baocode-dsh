@@ -14,6 +14,47 @@ class DshRouteException implements Exception {
   String toString() => message;
 }
 
+/// How dsh is told to speak to a route's endpoint (`api` in the patch), as
+/// pi-ai names them. A file's route is an OpenAI-compatible one, as it has
+/// always been; a route the app builds goes to its proxy as Anthropic's
+/// Messages API.
+enum DshApi {
+  openaiCompletions('openai-completions'),
+  openaiResponses('openai-responses'),
+  anthropicMessages('anthropic-messages');
+
+  const DshApi(this.id);
+
+  /// As the patch's `api` has it.
+  final String id;
+}
+
+/// One model a route declares to dsh: its id, the window the picker shows
+/// until dsh says its own, and whether it takes pictures.
+final class DshModel {
+  const DshModel({
+    required this.id,
+    required this.contextWindow,
+    this.name,
+    this.images = false,
+  });
+
+  final String id;
+
+  /// What the picker calls it; [id] when null.
+  final String? name;
+
+  final int contextWindow;
+
+  /// Whether it takes pictures (`input: [text, image]`).
+  final bool images;
+
+  String get displayName => switch (name?.trim()) {
+    final name? when name.isNotEmpty => name,
+    _ => id,
+  };
+}
+
 /// The model dsh's route runs on, as this machine's own file names it.
 ///
 /// The patch used to name a provider, an endpoint and a model in code: the
@@ -36,6 +77,12 @@ class DshRouteException implements Exception {
 ///
 /// It holds no key: `api_key_env` is the *name* dsh reads the key under, and
 /// dsh still reads its own store (F24).
+///
+/// A route Settings → Models picks is not read from a file: it is built for
+/// the model picked, and its key travels in the environment dsh is started
+/// with — the app's own proxy token, the upstream keys staying in the app
+/// (`DshRoutePlan`). That route speaks Anthropic's Messages API ([api]) to
+/// the proxy, which speaks whatever the provider does.
 final class DshRoute {
   const DshRoute({
     required this.provider,
@@ -43,6 +90,10 @@ final class DshRoute {
     required this.apiKeyEnv,
     required this.model,
     this.contextWindow = defaultContextWindow,
+    this.api = DshApi.openaiCompletions,
+    this.displayName,
+    this.models = const [],
+    this.viaProxy = false,
   });
 
   /// The file a machine keeps its route in, under the data directory's `dsh/`
@@ -70,6 +121,29 @@ final class DshRoute {
 
   /// What the patch declares the model holds, until dsh says otherwise.
   final int contextWindow;
+
+  /// How dsh speaks to [baseUrl]: the file's routes are an OpenAI-compatible
+  /// endpoint as they always were; the app's own goes to its proxy in
+  /// Anthropic's Messages API.
+  final DshApi api;
+
+  /// What dsh lists the provider as; [provider] when null.
+  final String? displayName;
+
+  /// The models the patch declares, the picked one among them; empty for
+  /// [model] alone. A route the app builds names each of the provider's, so
+  /// that dsh's picker switches among them without a restart.
+  final List<DshModel> models;
+
+  /// Whether this is the app's own route: through its model proxy. The patch
+  /// then quiets dsh's DeepSeek adapters, and the proxy is told not to keep
+  /// the calls (dsh's own usage report is the conversation's).
+  final bool viaProxy;
+
+  /// [models], or the one model this route runs on when it names no list.
+  List<DshModel> get declared => models.isEmpty
+      ? [DshModel(id: model, contextWindow: contextWindow, images: true)]
+      : models;
 
   /// The route kept under [directory], or the one [pathVariable] names; null
   /// when neither is there, dsh's own configuration being the route then.

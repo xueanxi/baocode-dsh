@@ -50,16 +50,16 @@ void main() {
     for (final line in [
       '- id: llm-pi-ai',
       "  name: '@deepseek-ai/dsh-llm-pi-ai'",
-      '        apiKeyEnv: STEPCODEV2_API_KEY',
-      '        api: openai-completions',
-      '        baseURL: https://i-ai-gw.stepx.com/v1',
+      "        apiKeyEnv: 'STEPCODEV2_API_KEY'",
+      "        api: 'openai-completions'",
+      "        baseURL: 'https://i-ai-gw.stepx.com/v1'",
       '            contextWindow: 512000',
       '            input: [text, image]',
       '- id: acp',
       "  name: '@deepseek-ai/dsh-acp'",
       '  inject: [acpAppStartup]',
-      '    provider: stepcodev2',
-      '    model: deepseek-v4.1-flash',
+      "    provider: 'stepcodev2'",
+      "    model: 'deepseek-v4.1-flash'",
     ]) {
       expect(text, contains(line));
     }
@@ -114,6 +114,60 @@ void main() {
 
     expect(RegExp(r'[A-Za-z0-9_\-]{32,}').hasMatch(text), isFalse);
   });
+
+  test(
+    'a route of the app\'s own: Anthropic\'s Messages API to its proxy, every '
+    'model it offers, the other adapters quiet',
+    () {
+      const own = DshRoute(
+        provider: 'gw',
+        displayName: 'Gateway: the one with a colon',
+        baseUrl: 'http://127.0.0.1:4321/p/gw',
+        apiKeyEnv: 'BAOCODE_DSH_PROXY_TOKEN',
+        api: DshApi.anthropicMessages,
+        model: 'gpt-5',
+        contextWindow: 400000,
+        models: [
+          DshModel(
+            id: 'gpt-5',
+            name: 'GPT-5',
+            contextWindow: 400000,
+            images: true,
+          ),
+          DshModel(id: 'mini', contextWindow: 100000),
+        ],
+        viaProxy: true,
+      );
+      final text = DshPatch.content(version: '0.2.0-rc.2', route: own);
+
+      for (final line in [
+        // A name with a colon in it stays one string.
+        "        displayName: 'Gateway: the one with a colon'",
+        "        api: 'anthropic-messages'",
+        "        baseURL: 'http://127.0.0.1:4321/p/gw'",
+        '        headers:',
+        "          x-baocode-usage: 'off'",
+        "          - id: 'gpt-5'",
+        "            name: 'GPT-5'",
+        '            contextWindow: 400000',
+        '            input: [text, image]',
+        "          - id: 'mini'",
+        '            contextWindow: 100000',
+        '            input: [text]',
+        // What would otherwise be listed with no key, and fail every turn.
+        '- id: llm-deepseek',
+        '  disabled: true',
+        '- id: llm-deepseek-account',
+        '  disabled: true',
+      ]) {
+        expect(text, contains(line));
+      }
+      // A single model's route says none of the proxy's own.
+      final plain = DshPatch.content(version: '0.2.0-rc.2', route: route);
+      expect(plain, isNot(contains('x-baocode-usage')));
+      expect(plain, isNot(contains('llm-deepseek')));
+    },
+  );
 
   test(
     'the answerer is inserted where there is one, and left out where not',
@@ -210,10 +264,10 @@ void main() {
       // written by is the one the project runs on.
       for (final line in [
         '- id: llm-pi-ai',
-        '        apiKeyEnv: STEPCODEV2_API_KEY',
+        "        apiKeyEnv: 'STEPCODEV2_API_KEY'",
         '- id: agent-default-model',
-        '    provider: stepcodev2',
-        '    model: deepseek-v4.1-flash',
+        "    provider: 'stepcodev2'",
+        "    model: 'deepseek-v4.1-flash'",
         // Answered in one reply, with nothing around it.
         '- id: system-prompt',
         '    personaPrefix: >-',

@@ -4676,6 +4676,9 @@
   "modelsTitle": "Models",
   "modelsDefault": "Default Model for New Sessions",
   "modelsDefaultDescription": "Unset, a new session starts with the model last picked.",
+  "modelsDsh": "DSH model",
+  "modelsDshDescription": "The model DSH conversations run on, from the upstreams here: its key is handed to dsh at launch, never written to a file. Unset, dsh uses its own configuration (dsh web, or dsh/dsh.env). A change applies to the next conversation.",
+  "modelsDshOwn": "DSH's own configuration",
   "modelsDefaultLast": "Last picked",
   "modelsChoiceLabel": "{label}: {value}",
   "@modelsChoiceLabel": {

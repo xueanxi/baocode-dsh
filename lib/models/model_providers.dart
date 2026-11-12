@@ -67,6 +67,7 @@ class ModelProviders extends ChangeNotifier {
   static const auxiliaryKey = 'models.auxiliary';
   static const actionsKey = 'models.actions';
   static const imageKey = 'models.image';
+  static const dshKey = 'models.dsh';
 
   /// [actionsModel]'s value for the auxiliary model, whatever it is.
   static const followAuxiliary = 'auxiliary';
@@ -199,6 +200,26 @@ class ModelProviders extends ChangeNotifier {
   };
 
   Future<void> setActionsModel(String? model) => _write(actionsKey, model);
+
+  /// The model DSH runs on (a [modelRef]), picked in Settings → Models; null
+  /// while DSH is left to its own configuration (`dsh/dsh.env`, or its ACP
+  /// profile).
+  String? get dshModel => switch (_read(dshKey)) {
+    final String model when model.isNotEmpty && parseModelRef(model) != null =>
+      model,
+    _ => null,
+  };
+
+  Future<void> setDshModel(String? model) => _write(dshKey, model);
+
+  /// The models DSH may run on: a conversation model of each upstream turned
+  /// on. The app's proxy speaks for all of them, so an OpenAI-compatible or
+  /// a Responses model is offered beside an Anthropic one.
+  List<({ModelProvider provider, ProviderModel model})> get dshModels => [
+    for (final provider in enabled)
+      for (final model in provider.enabledModels)
+        if (!model.kind.generatesImages) (provider: provider, model: model),
+  ];
 
   /// The image model the agents make pictures with unless they name
   /// another (a [modelRef]); null for the first turned on.

@@ -262,7 +262,9 @@ function versionOf(binJs) {
  *
  * The route is not mirrored: it is read from the same file the app reads
  * (`lib/kernel/dsh/dsh_route.dart`), so a smoke run spends a model call on
- * the model the app would use, and no route file means dsh's own.
+ * the model the app would use, and no route file means dsh's own. The route
+ * Settings → Models picks is not one this script can run: it goes through the
+ * app's own proxy, which only the app starts.
  *
  * There is no `bashPath` here: the adapter adds the `tool-bash` row when it
  * finds this machine's Git Bash *and* `dsh-gitbash-shell` is installed for the
@@ -361,14 +363,14 @@ function patchText(version, route) {
       "  name: '@deepseek-ai/dsh-llm-pi-ai'",
       '  config:',
       '    providers:',
-      `      ${route.provider}:`,
-      `        displayName: ${route.provider}`,
-      `        apiKeyEnv: ${route.apiKeyEnv}`,
-      '        api: openai-completions',
-      `        baseURL: ${route.baseUrl}`,
+      `      ${quoted(route.provider)}:`,
+      `        displayName: ${quoted(route.provider)}`,
+      `        apiKeyEnv: ${quoted(route.apiKeyEnv)}`,
+      "        api: 'openai-completions'",
+      `        baseURL: ${quoted(route.baseUrl)}`,
       '        models:',
-      `          - id: ${route.model}`,
-      `            name: ${route.model}`,
+      `          - id: ${quoted(route.model)}`,
+      `            name: ${quoted(route.model)}`,
       `            contextWindow: ${route.contextWindow}`,
       '            input: [text, image]',
     );
@@ -381,11 +383,17 @@ function patchText(version, route) {
   if (route !== null) {
     lines.push(
       '  config:',
-      `    provider: ${route.provider}`,
-      `    model: ${route.model}`,
+      `    provider: ${quoted(route.provider)}`,
+      `    model: ${quoted(route.model)}`,
     );
   }
   return `${lines.join('\n')}\n`;
+}
+
+/** [value] as a YAML scalar that is one string whatever it holds (as
+ * `DshPatch._quoted` writes it). */
+function quoted(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
 }
 
 function writePatch(version, route) {
