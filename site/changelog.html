@@ -30,6 +30,23 @@
   <h1>Changelog</h1>
   <p class="subtitle">What changed in each version of BaoCode.</p>
 
+  <section class="release" id="v1.9.3">
+    <h2 class="plain"><a href="#v1.9.3">1.9.3</a></h2>
+    <p>This release hands DSH's model over to Settings → Models: every upstream turned on can be switched to inside a conversation, and an older conversation no longer fails because it recorded an upstream that is gone.</p>
+    <p>New</p>
+    <ul>
+    <li>Every model of every upstream turned on in Settings → Models is in the DSH conversation's model picker; switching within or across upstreams needs no restart.</li>
+    <li>DSH model names the model a conversation starts on; with none picked it starts on the default model, keeping this machine's dsh/dsh.env model where that one is among those turned on.</li>
+    <li>Follow DSH's own configuration is still there on its own, going through dsh web or dsh/dsh.env.</li>
+    <li>An upstream's key stays in the app; dsh is given only the local proxy's token, made anew each run and never written to a file.</li>
+    </ul>
+    <p>Fixed</p>
+    <ul>
+    <li>A conversation that recorded an upstream this route no longer declares no longer fails with <code>no adapter registered for provider &quot;…&quot;</code>: it opens, then moves onto the current route's model.</li>
+    <li>Full access no longer treats a dangerous command's safety check as something to confirm by hand.</li>
+    </ul>
+  </section>
+
   <section class="release" id="v1.9.2">
     <h2 class="plain"><a href="#v1.9.2">1.9.2</a></h2>
     <p>This release fixes a batch of chat, model and SSH problems, brings SSH remote to Linux hosts on RISC-V, and lets models go through magpie's gateway.</p>

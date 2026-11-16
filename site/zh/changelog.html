@@ -30,6 +30,23 @@
   <h1>更新日志</h1>
   <p class="subtitle">BaoCode 每个版本的变化。</p>
 
+  <section class="release" id="v1.9.3">
+    <h2 class="plain"><a href="#v1.9.3">1.9.3</a></h2>
+    <p>这一版把 DSH 的模型交给「设置 → 模型」：打开的上游都能在对话里直接切换，旧对话也不会再因为早先记下的上游而发不出去。</p>
+    <p>新功能</p>
+    <ul>
+    <li>设置 → 模型里打开的上游，其每个模型都进 DSH 对话的模型选择器，组内或跨组切换都不用重启。</li>
+    <li>「DSH 模型」可指定对话从哪个模型起跑；不选时用新会话的默认模型，本机 dsh/dsh.env 的模型仍在已打开模型里时沿用它。</li>
+    <li>「跟随 DSH 自己的配置」单独保留，仍然走 dsh web 或 dsh/dsh.env。</li>
+    <li>上游的 key 只留在 app 里，交给 dsh 的是每次运行重新生成的本地代理 token，不写进文件。</li>
+    </ul>
+    <p>修复</p>
+    <ul>
+    <li>旧对话记着已经不存在的上游时不再报 <code>no adapter registered for provider &quot;…&quot;</code>：会话能正常打开，随后自动切到当前路由的模型。</li>
+    <li>完全访问下不再把危险命令的安全检查当成要人工确认的事。</li>
+    </ul>
+  </section>
+
   <section class="release" id="v1.9.2">
     <h2 class="plain"><a href="#v1.9.2">1.9.2</a></h2>
     <p>这一版修了一批对话、模型和 SSH 相关的问题，另外 SSH 远程开始支持 RISC-V 的 Linux 主机，模型可以接入 magpie 的网关。</p>
