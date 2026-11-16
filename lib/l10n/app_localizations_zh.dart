@@ -6119,7 +6119,10 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get modelsDshDescription =>
-      'DSH 对话跑在这个上游的这个模型上；key 只在启动时交给 dsh，不写进文件。未设置时，DSH 用它自己的配置（dsh web 或 dsh/dsh.env）。改动对下一通对话生效。';
+      'DSH 对话从这里已打开的上游起跑：每个上游的所有模型都出现在对话的模型选择器里，key 只在启动时交给 dsh，不写进文件。未设置时，对话从默认模型起跑；本机 dsh/dsh.env 的模型也在已打开的模型里时沿用它。选「跟随 DSH 自己的配置」则交给 dsh web 或 dsh/dsh.env。改动对下一通对话生效。';
+
+  @override
+  String get modelsDshAutomatic => '自动（用这里的模型）';
 
   @override
   String get modelsDshOwn => '跟随 DSH 自己的配置';

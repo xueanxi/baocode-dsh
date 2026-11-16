@@ -151,6 +151,10 @@ class DshKernel
   /// what the next one runs on.
   final DshRoute? _givenRoute;
 
+  /// The route this run declared, once it is known: what dsh's recorded
+  /// model selection is checked against (see [_adoptRouteModel]).
+  DshRoute? _route;
+
   /// The plan a test gave, when the app's own route is what it exercises:
   /// what Settings → Models would give, and the environment carrying it.
   final DshRoutePlan? _givenPlan;
@@ -276,6 +280,10 @@ class DshKernel
   // What dsh offers (its `configOptions`), and what is in effect: the model
   // and, where the model has them, its reasoning levels (F6).
   Map<String, Object?>? _modelOption;
+
+  /// [route]'s models, shown before dsh makes the session that lists them
+  /// (see [_primeModelOption]); a session's own report replaces it.
+  Map<String, Object?>? _primedOption;
   Map<String, Object?>? _effortOption;
   String? _reportedModel;
   String? _reportedEffort;
@@ -614,6 +622,26 @@ class DshKernel
     return _starting ??= _launch().whenComplete(() => _starting = null);
   }
 
+  /// [plan]'s route, with the model this conversation may have recorded under
+  /// an earlier route declared beside it: dsh resolves a resumed session's
+  /// recorded model before anything can move it, and `session/resume` fails
+  /// with "no adapter registered for provider" when it cannot (see
+  /// [DshRoute.carrying]). Only a resumed conversation has one recorded.
+  DshRoute? _routeForPlan(DshRoutePlan plan) {
+    final route = plan.route;
+    if (route == null || _sessionId == null) return route;
+    return route.carrying([
+      _wantedModel,
+      _reportedModel,
+      // What dsh's last session listed as its model, where this conversation
+      // keeps no pick of its own: the session being resumed is usually it.
+      switch (_readKeptModelOption()?['currentValue']) {
+        final String value => value,
+        _ => null,
+      },
+    ]);
+  }
+
   Future<void> _launch() async {
     // The process before is gone before the next starts: dsh refuses a
     // session another process still holds (F15).
@@ -657,9 +685,15 @@ class DshKernel
                   directory: DataDirectory.current.dshDir,
                   environment: environment,
                 ));
-      final route = plan.route;
+      final route = _routeForPlan(plan);
+      _route = route;
       _translator.contextWindow =
           route?.contextWindow ?? DshRoute.defaultContextWindow;
+      // What Settings → Models has, before dsh makes the session that lists
+      // it: a model just added shows in the picker at once, and one removed
+      // does not wait for a first message. Only an app route says the whole
+      // list: a file's is one upstream, and dsh may list others beside it.
+      if (route != null && route.viaProxy) _primeModelOption(route);
       final bridge = await _openAskBridge();
       final usage = await _openUsageBridge();
       // The rewind plugin takes no endpoint and no secret: a file, named by
@@ -1044,6 +1078,7 @@ class DshKernel
         await _resume(session);
         _sessionActive = true;
       }
+      await _adoptRouteModel();
       await _pushPicks();
       return;
     }
@@ -1064,6 +1099,7 @@ class DshKernel
     // Listed by the next run from the moment dsh makes it, even if nothing
     // in it is said yet (a failure before the first turn ends).
     unawaited(_keepSession());
+    await _adoptRouteModel();
     await _pushPicks();
   }
 
@@ -1390,7 +1426,9 @@ class DshKernel
   @override
   late final KernelChoiceSource model = _Choice(
     options: () => [
-      for (final choice in _choicesOf(_modelOption ?? _readKeptModelOption()))
+      for (final choice in _choicesOf(
+        _modelOption ?? _primedOption ?? _readKeptModelOption(),
+      ))
         KernelOption(
           '${choice.value['value']}',
           '${choice.value['name'] ?? choice.value['value']}',
@@ -1402,7 +1440,7 @@ class DshKernel
         ),
     ],
     selected: () {
-      final option = _modelOption ?? _readKeptModelOption();
+      final option = _modelOption ?? _primedOption ?? _readKeptModelOption();
       // Picked before this session existed: shown as picked while the last
       // session listed it; otherwise what that one had, until this one says.
       if (_wantedModel case final model? when _offers(option, model)) {
@@ -1496,7 +1534,7 @@ class DshKernel
   /// Keeps what dsh says it offers and has in effect.
   void _applyOptions(Object? raw) {
     final options = _optionList(raw);
-    _modelOption = _optionNamed(options, 'model');
+    _modelOption = _withoutRecorded(_optionNamed(options, 'model'));
     _effortOption = _optionNamed(options, 'reasoning_effort');
     _reportedModel = _currentOf(_modelOption);
     _reportedEffort = _currentOf(_effortOption);
@@ -1513,6 +1551,51 @@ class DshKernel
     if (_wantedEffort == _reportedEffort) _wantedEffort = null;
     emitInfoChanged();
   }
+
+  /// Shows [route]'s models before dsh has listed them: a session is made
+  /// only with the first message, and the list kept from the run before can
+  /// be one Settings → Models no longer has. dsh's own report replaces it
+  /// once there is a session.
+  void _primeModelOption(DshRoute route) {
+    final expected = _modelOptionOf(route);
+    final shown = _modelOption ?? _primedOption ?? _readKeptModelOption();
+    if (_sameChoiceValues(shown, expected)) return;
+    _primedOption = expected;
+    emitInfoChanged();
+  }
+
+  /// [route]'s models as dsh lists them: grouped by upstream, each choice
+  /// the JSON pair dsh writes for it.
+  static Map<String, Object?> _modelOptionOf(DshRoute route) => {
+    'id': 'model',
+    'name': 'Model',
+    'category': 'model',
+    'type': 'select',
+    'currentValue': jsonEncode([route.provider, route.model]),
+    'options': [
+      for (final upstream in route.declaredUpstreams)
+        {
+          'group': upstream.provider,
+          'name': upstream.displayName ?? upstream.provider,
+          'options': [
+            for (final model in upstream.models)
+              {
+                'value': jsonEncode([upstream.provider, model.id]),
+                'name': model.displayName,
+              },
+          ],
+        },
+    ],
+  };
+
+  /// Whether [a] offers the same model choices, in the same order, as [b].
+  static bool _sameChoiceValues(
+    Map<String, Object?>? a,
+    Map<String, Object?> b,
+  ) => listEquals(
+    [for (final choice in _choicesOf(a)) '${choice.value['value']}'],
+    [for (final choice in _choicesOf(b)) '${choice.value['value']}'],
+  );
 
   /// [modelCache]'s model option, read on its first use this run: dsh has
   /// listed none until a session is made.
@@ -1538,6 +1621,54 @@ class DshKernel
             (Object error) => debugPrint('$modelCacheKey not kept: $error'),
           ),
     );
+  }
+
+  /// Moves a session whose recorded model this route no longer declares —
+  /// one made before the patch named another upstream — onto a model it
+  /// does, before the prompt that would fail with "no adapter registered".
+  Future<void> _adoptRouteModel() async {
+    final route = _route;
+    if (route == null || !_sessionActive) return;
+    final offered = <String>{
+      for (final upstream in route.declaredUpstreams)
+        for (final model in upstream.models)
+          jsonEncode([upstream.provider, model.id]),
+    };
+    final providers = {
+      for (final upstream in route.declaredUpstreams) upstream.provider,
+    };
+    final current = _wantedModel ?? _reportedModel;
+    final currentProvider = _providerOf(current);
+    if (current != null && currentProvider != null) {
+      // The upstream is one this route declares: dsh may list more models
+      // than a file route names, and a pick among them is the user's. An app
+      // route declares the whole list, so a model it lost moves too.
+      if (!providers.contains(currentProvider)) {
+        // No adapter registered for it: moved below.
+      } else if (!route.viaProxy || offered.contains(current)) {
+        return;
+      }
+    }
+    final start = jsonEncode([route.provider, route.model]);
+    final value = offered.contains(start) ? start : offered.firstOrNull;
+    if (value == null) return;
+    _wantedModel = value;
+    emitInfoChanged();
+    await _setOption('model', value);
+  }
+
+  /// The upstream a dsh model value names, `["provider","model"]`; null when
+  /// it is not one (a value another kernel wrote).
+  static String? _providerOf(String? value) {
+    if (value == null) return null;
+    try {
+      if (jsonDecode(value) case [final Object provider, ...]) {
+        return '$provider';
+      }
+    } on FormatException {
+      // Not dsh's shape: moved onto this route below.
+    }
+    return null;
   }
 
   /// Tells dsh the picks it does not have in effect: the options picked
@@ -1590,6 +1721,38 @@ class DshKernel
 
   static bool _offers(Map<String, Object?>? option, String value) =>
       _choicesOf(option).any((choice) => '${choice.value['value']}' == value);
+
+  /// [option], dsh's model option, without what this route declares only so a
+  /// resumed session's recorded model resolves ([DshRoute.recorded]): dsh
+  /// lists those beside the route's own — it must, to resolve the session —
+  /// and they are not choices of this route. The choice in effect is kept as
+  /// dsh reports it, until the kernel moves the session onto this route
+  /// ([_adoptRouteModel]).
+  Map<String, Object?>? _withoutRecorded(Map<String, Object?>? option) {
+    final recorded = _route?.recorded ?? const <(String, String)>[];
+    final raw = option?['options'];
+    if (option == null || recorded.isEmpty || raw is! List) return option;
+    bool recordedChoice(Object? value) {
+      final pair = DshRoute.choiceOf('$value');
+      return pair != null && recorded.contains(pair);
+    }
+
+    final groups = <Object?>[];
+    for (final entry in raw) {
+      if (entry is! Map) continue;
+      if (entry['group'] is! String) {
+        if (!recordedChoice(entry['value'])) groups.add(entry);
+        continue;
+      }
+      final options = [
+        for (final value in entry['options'] as List? ?? const [])
+          if (value is Map && !recordedChoice(value['value'])) value,
+      ];
+      if (options.isEmpty) continue;
+      groups.add({...entry, 'options': options});
+    }
+    return {...option, 'options': groups};
+  }
 
   /// The values [option] offers, each with the heading dsh lists it under:
   /// models are grouped by provider (F6).

@@ -147,26 +147,32 @@ abstract final class DshPatch {
   /// also quiets dsh's DeepSeek adapters — they would otherwise be listed
   /// without a key, which is the trap this route exists to close — and tells
   /// the proxy not to keep the calls (dsh reports their usage itself).
+  ///
+  /// [DshRoute.patchUpstreams] is what is declared: the route's own models,
+  /// and those a resumed session recorded under a route that is gone, so
+  /// that dsh can open the session and be moved onto this one.
   static List<String> _routeOf(DshRoute route) => [
     '- id: llm-pi-ai',
     "  name: '@deepseek-ai/dsh-llm-pi-ai'",
     '  config:',
     '    providers:',
-    '      ${_quoted(route.provider)}:',
-    '        displayName: ${_quoted(route.displayName ?? route.provider)}',
-    '        apiKeyEnv: ${_quoted(route.apiKeyEnv)}',
-    '        api: ${_quoted(route.api.id)}',
-    '        baseURL: ${_quoted(route.baseUrl)}',
-    if (route.viaProxy) ...[
-      '        headers:',
-      "          ${UsageHeaders.quiet}: 'off'",
-    ],
-    '        models:',
-    for (final model in route.declared) ...[
-      '          - id: ${_quoted(model.id)}',
-      '            name: ${_quoted(model.displayName)}',
-      '            contextWindow: ${model.contextWindow}',
-      '            input: ${model.images ? '[text, image]' : '[text]'}',
+    for (final upstream in route.patchUpstreams) ...[
+      '      ${_quoted(upstream.provider)}:',
+      '        displayName: ${_quoted(upstream.displayName ?? upstream.provider)}',
+      '        apiKeyEnv: ${_quoted(upstream.apiKeyEnv)}',
+      '        api: ${_quoted(upstream.api.id)}',
+      '        baseURL: ${_quoted(upstream.baseUrl)}',
+      if (route.viaProxy) ...[
+        '        headers:',
+        "          ${UsageHeaders.quiet}: 'off'",
+      ],
+      '        models:',
+      for (final model in upstream.models) ...[
+        '          - id: ${_quoted(model.id)}',
+        '            name: ${_quoted(model.displayName)}',
+        '            contextWindow: ${model.contextWindow}',
+        '            input: ${model.images ? '[text, image]' : '[text]'}',
+      ],
     ],
     if (route.viaProxy) ...[
       '- id: llm-deepseek',

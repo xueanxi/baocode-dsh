@@ -16,7 +16,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 
 选中 DSH 后，BaoCode 在**项目目录**里起一个 ACP 子进程，把会话更新翻译成既有对话事件；权限三档在**首条消息之前**选定，之后锁定（dsh 的档位写在会话日志里，`session/resume` 不会改它——实测）。模型实时切换。历史会话不在 BaoCode 列（不做会话目录），正文在 `~/.dsh`，去 dsh web 看。
 
-不安装 dsh、不安装插件、不写 `~/.dsh` 的任何文件：只用 `--patch` 叠加配置。模型与凭据有两个来源（§5.4）：设置 → 模型选的那条路由走 app 自己的本地模型代理，上游 key 留在 app；否则沿用 dsh 自己的 `refs` 与 profile，或 `dsh/dsh.env` 给出的路由。
+不安装 dsh、不安装插件、不写 `~/.dsh` 的任何文件：只用 `--patch` 叠加配置。模型与凭据有两个来源（§5.4）：设置 → 模型里已打开的上游都走 app 自己的本地模型代理，上游 key 留在 app；否则沿用 dsh 自己的 `refs` 与 profile，或 `dsh/dsh.env` 给出的路由。
 
 ## 3. 已核实的事实
 
@@ -38,7 +38,7 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 | F12 | `session/prompt {sessionId, prompt:[{type:"text"}]}` → `{stopReason}`；并发第二个 prompt → `-32602 a prompt is already in flight`；失败 → `-32603 "Internal error"`，细节在 `data.details = "turn failed: …"`，**没有 stopReason** |
 | F13 | stopReason 映射：completed→`end_turn`、max-tokens→`max_tokens`、aborted→`end_turn`、blocked→`end_turn`、interrupted→`cancelled`；错误回合拒绝、不返回 stopReason |
 | F14 | `session/cancel {sessionId}` 是通知，不回应答 |
-| F15 | `session/resume {sessionId, cwd}` → `{configOptions}`，不重放历史。错误四种：同进程 `-32602 session is already active`（先于 cwd 检查）、跨进程旧进程仍持锁 `-32603 already owned by an active write handle`、未知/子代理 `-32602 not resumable`、cwd 不符 `-32602 session cwd does not match`。旧进程退出后跨进程 resume 成功（实测，Windows 无锁文件，进程亡即释放） |
+| F15 | `session/resume {sessionId, cwd}` → `{configOptions}`，不重放历史。错误四种：同进程 `-32602 session is already active`（先于 cwd 检查）、跨进程旧进程仍持锁 `-32603 already owned by an active write handle`、未知/子代理 `-32602 not resumable`、cwd 不符 `-32602 session cwd does not match`。旧进程退出后跨进程 resume 成功（实测，Windows 无锁文件，进程亡即释放）。**resume 先解析会话记录的模型，再返回 `configOptions`**：记录里的 provider 已没有 adapter（`no adapter registered for provider "…"`）或模型已不在该 provider 的声明里（`pi-ai provider "…" has no configured model "…"`）时整次 resume 以 `-32603` 失败，此时还不能用 `session/set_config_option` 换（它要先解析当前选择）。内核因此在补丁里一并声明这条对话记录的 `(provider, model)`，见 §5.4 |
 | F16 | **resume 不改变权限档位**：dsh 在会话创建时把预设写进会话日志，`sandbox mode = 请求覆盖 ?? 会话日志 ?? 启动默认`（实测：read-only 建的会话，用 danger-full-access 重启并 resume 后仍受限；新建会话才生效） |
 | F17 | `session/list {cwd?, cursor?}` 只给 `{sessionId, cwd}` 与 `nextCursor`（100/页，最新优先）；没有标题与时间，不可重放 |
 | F18 | `session/close` 存在（释放写锁）；`session/load`、`fork`、`delete`、`set_mode`、`rename`、`fs/*`、`terminal/*` 全为 `-32601`；没有 modes |
@@ -142,18 +142,21 @@ BaoCode 的对话只能跑 Claude Code 一个 agent。本机已装 dsh（DeepSee
 
 ### 5.4 profile 补丁
 
-模型路由不在代码里：`DshRoute`（`lib/kernel/dsh/dsh_route.dart`）有两个来源，由 `DshRoutePlan`（`dsh_route_plan.dart`）按下面的顺序选一个：
+模型路由不在代码里：`DshRoute`（`lib/kernel/dsh/dsh_route.dart`）描述一条路由，由 `DshRoutePlan`（`dsh_route_plan.dart`）按下面的顺序选一个：
 
 1. `BAOCODE_DSH_ENV` 指名的文件——脚本或测试的明确指令，缺了报错、不回退；
-2. **设置 → 模型 → 「DSH 模型」**（`models.dsh`，一个 `modelRef`）：路由按这个上游与模型现算，`baseURL` 指向 app 自己的本地模型代理（`lib/models/proxy/model_proxy.dart`），`apiKeyEnv` 是 `BAOCODE_DSH_PROXY_TOKEN`，token 只放在起 dsh 的环境里；补丁声明该上游**所有**会话模型（图片模型除外），dsh 的模型选择器因此能在同一个上游内切换而不重启；
-3. 应用数据目录的 `dsh/dsh.env`：`provider`、`base_url`、`api_key_env`、`model` 与可选的 `context_window`（`.env` 的写法，`BAOCODE_DSH_ENV` 可改路径）；
-4. 都没有：下面 `llm-pi-ai` 与 `acp.config` 两段都不写，dsh 用它自己 profile 的模型。
+2. **设置 → 模型 → 「跟随 DSH 自己的配置」**（`models.dsh = own`）：用应用数据目录的 `dsh/dsh.env`，没有就用 dsh profile 自己的；
+3. **设置 → 模型里已打开的上游**：每个上游各是一个 dsh provider，`baseURL` 指向 app 自己的本地模型代理（`lib/models/proxy/model_proxy.dart`）的 `/p/<provider>`，`apiKeyEnv` 是 `BAOCODE_DSH_PROXY_TOKEN`，token 只放在起 dsh 的环境里；补丁声明每个上游**所有**会话模型（图片模型除外），dsh 的模型选择器按上游分组列出它们，组内或跨组切换都不重启。对话的起跑模型是 `models.dsh` 选的那个（一个 `modelRef`），没选则用默认模型；`dsh.env` 的模型也在其中时沿用它，不悄悄换模型；
+4. 设置里一个会话模型都没打开时，应用数据目录的 `dsh/dsh.env`：`provider`、`base_url`、`api_key_env`、`model` 与可选的 `context_window`（`.env` 的写法，`BAOCODE_DSH_ENV` 可改路径）；
+5. 都没有：下面 `llm-pi-ai` 与 `acp.config` 两段都不写，dsh 用它自己 profile 的模型。
 
-文件存在但不可用（缺键、未知键、坏 URL、坏窗口、读不了）时启动失败，报文件与行号，不回退。文件只含 ref 名，不含 key（F24）；设置里选的那条路由也不含 key，上游的 key 从不离开 app。
+文件存在但不可用（缺键、未知键、坏 URL、坏窗口、读不了）时，只有在设置里没有可用的模型时才启动失败，报文件与行号，不回退。文件只含 ref 名，不含 key（F24）；app 的路由也不含 key，上游的 key 从不离开 app。
+
+**旧会话记录的模型（F15）。** dsh 在 `session/resume` 时先解析会话日志里记下的 `model/selection`，而 ACP 的 resume 不会用 `acp.config` 覆盖它（只有 `session/new` 会），所以路由换代后旧会话会以 `no adapter registered for provider "…"` 打不开，也就没机会 `session/set_config_option`。内核在起进程前把这条对话自己的模型选择（`state.json` 里该对话的 `model`，dsh 上次列出的 `currentValue` 作为兜底）交给 `DshRoute.carrying`：不在此路由里的 `(provider, model)` 被加进补丁（同名上游已有时把模型并入它，否则按本路由的 `baseURL` / `apiKeyEnv` / `api` 新建一段），但**不进 `declaredUpstreams`**，选择器里也按值过滤掉。会话打开后 `_adoptRouteModel` 立刻把它切到当前路由的模型，之后每轮都走当前路由；切换过一次的会话日志里记的就是当前路由，下一次启动不再需要声明。
 
 **为什么 app 的路由走本地代理（决策，2026-11-11）。** 上游的协议（Anthropic / OpenAI Chat / Responses / Codex 账号）、鉴权方式（`x-api-key` / bearer）与自定义请求头各不相同，而 pi-ai 的一种 `api` 只对应一种；把上游 key 或带 key 的自定义头写进补丁更是把密钥落盘。app 的模型代理已经为 Claude Code 把这几件事都做完了（协议转换、账号轮换、错误回报、用量记录），dsh 因此只说一种协议（Anthropic Messages，代理的 `/p/<provider>`），拿到的唯一秘密是一个**只监听 loopback、每次运行重新生成**的 token。这条路由也顺带关闭 dsh 的 DeepSeek 适配器（`llm-deepseek` / `llm-deepseek-account`）：它们会以「没有凭据」的样子出现在模型选择器里，正是本次要修的那个坑。代理从 `x-baocode-usage: off` 头认出 dsh 的请求，不重复记用量——dsh 通过 `baocode-usage-bridge` 自己报（§5.18），两边都记会翻倍。
 
-下面的补丁取自本机的一份 `dsh.env`（示例值；app 路由的形状相同，只是 `api` 是 `anthropic-messages`、`baseURL` 是 `http://127.0.0.1:<port>/p/<provider>`、多一行 `headers`）：
+下面的补丁取自本机的一份 `dsh.env`（示例值；app 路由的形状相同，只是每个上游各一段、`api` 是 `anthropic-messages`、`baseURL` 是 `http://127.0.0.1:<port>/p/<provider>`、多一行 `headers`）：
 
 ```yaml
 # Generated by BaoCode for dsh <version>. Do not edit.
@@ -266,7 +269,7 @@ TurnEnded(turnId, interrupted: bool, worked: Duration?, usage: …)
 ### 5.10 跨面与界面
 
 - **可用性**：`KernelDescriptor.available` 谓词。DSH 仅当「项目是单目录、且在本机」时可用；多文件夹工作区（cwd 是 `<data>/workspaces/<id>` 的空目录）与远端项目下不提供。Claude 不设谓词（永远可用）。
-- **标题**：DSH 声明 `RenamesSession` 与 `TitlesItsOwnSessions`。新会话的首条消息后，内核用 `askDsh` 走**同一条路由**（设置 → 模型选的那条，或 `dsh.env`）做一次性标题生成（不把 DSH 对话文本发给 Claude Haiku），成功则写回账本并发 `SessionRenamed`；失败或取消时保留首行。手动双击改名只写账本；手动「总结标题」也走内核的 `titleFor`（`askDsh`）。ACP 的 `session/rename` 仍不提供（F18）。
+- **标题**：DSH 声明 `RenamesSession` 与 `TitlesItsOwnSessions`。新会话的首条消息后，内核用 `askDsh` 走**同一条路由**（设置 → 模型里打开的上游，或 `dsh.env`）做一次性标题生成（不把 DSH 对话文本发给 Claude Haiku），成功则写回账本并发 `SessionRenamed`；失败或取消时保留首行。手动双击改名只写账本；手动「总结标题」也走内核的 `titleFor`（`askDsh`）。ACP 的 `session/rename` 仍不提供（F18）。
 - **图片**：`AcceptsImages.supportsImages`；真实能力为 false 时剥掉图片并提示（提示在同一轮内）。握手未完成时它是 false（「还不知道」），带图的一轮等握手再决定，不抢先剥掉。
 - **线程记住的内核在本项目不可用**（例如把 DSH 对话挪进多文件夹项目）：会话以当前第一个可用内核打开（`ChatSession._availableKernel`）；一个都不可用时才保留原内核。不报错。
 - **用量**：不声明 `ReportsUsage`（那是账号额度）；每笔调用的令牌由 `baocode-usage-bridge` 记入设置→用量（§5.18）。

@@ -6519,7 +6519,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get modelsDshDescription =>
-      'The model DSH conversations run on, from the upstreams here: its key is handed to dsh at launch, never written to a file. Unset, dsh uses its own configuration (dsh web, or dsh/dsh.env). A change applies to the next conversation.';
+      'The model DSH conversations start on, from the upstreams here: every model of every upstream turned on is offered in the conversation\'s picker, and the upstream\'s key is handed to dsh at launch, never written to a file. Unset, a conversation starts on the default model, or on the model dsh/dsh.env names while that one is turned on; choose DSH\'s own configuration to let dsh use dsh web or dsh/dsh.env. A change applies to the next conversation.';
+
+  @override
+  String get modelsDshAutomatic => 'Automatic (models here)';
 
   @override
   String get modelsDshOwn => 'DSH\'s own configuration';

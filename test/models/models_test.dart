@@ -642,12 +642,19 @@ void main() {
         ],
       );
       expect(providers.dshModel, isNull);
+      expect(providers.dshModelIsOwn, isFalse);
       // Claude Code as set up on this machine holds no model DSH could use.
       await providers.setDshModel('default');
       expect(providers.dshModel, isNull);
 
+      // Told to keep its own configuration: no model here, whatever is on.
+      await providers.setDshModelOwn();
+      expect(providers.dshModel, isNull);
+      expect(providers.dshModelIsOwn, isTrue);
+
       await providers.setDshModel('@gw/gpt-5');
       expect(providers.dshModel, '@gw/gpt-5');
+      expect(providers.dshModelIsOwn, isFalse);
       // Pictures are not a conversation's model, and a provider turned off
       // offers none.
       expect(

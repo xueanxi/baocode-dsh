@@ -31,6 +31,45 @@ import 'package:path/path.dart' as p;
 
 import 'dsh_route_fixture.dart';
 
+/// A route through the app's proxy with two upstreams, as Settings → Models
+/// builds one: the picker offers every model of each before a session says
+/// what dsh itself lists.
+const _twoUpstreamsRoute = DshRoute(
+  provider: 'gw',
+  displayName: 'Gateway',
+  baseUrl: 'http://127.0.0.1:1/p/gw',
+  apiKeyEnv: DshRoutePlan.proxyTokenVariable,
+  api: DshApi.anthropicMessages,
+  model: 'gpt-5',
+  contextWindow: 400000,
+  models: [
+    DshModel(id: 'gpt-5', name: 'GPT-5', contextWindow: 400000),
+    DshModel(id: 'mini', contextWindow: 100000),
+  ],
+  upstreams: [
+    DshUpstream(
+      provider: 'gw',
+      displayName: 'Gateway',
+      baseUrl: 'http://127.0.0.1:1/p/gw',
+      apiKeyEnv: DshRoutePlan.proxyTokenVariable,
+      api: DshApi.anthropicMessages,
+      models: [
+        DshModel(id: 'gpt-5', name: 'GPT-5', contextWindow: 400000),
+        DshModel(id: 'mini', contextWindow: 100000),
+      ],
+    ),
+    DshUpstream(
+      provider: 'other',
+      displayName: 'Other',
+      baseUrl: 'http://127.0.0.1:1/p/other',
+      apiKeyEnv: DshRoutePlan.proxyTokenVariable,
+      api: DshApi.anthropicMessages,
+      models: [DshModel(id: 'm-1', name: 'M One', contextWindow: 200000)],
+    ),
+  ],
+  viaProxy: true,
+);
+
 /// The kernel's handshake with dsh, the session it makes on the first
 /// message, what it offers once that session is there, and how it lets the
 /// process go again. Nothing is started: the transport is
@@ -478,7 +517,7 @@ void main() {
         'stepcodev2': ['deepseek-v4.1-flash', 'deepseek-v4-pro'],
       },
     );
-    final one = first.kernel();
+    final one = first.kernel(route: null);
     final events = _listen(one);
     one.prepare();
     await settled(() => one.health.status == KernelHealthStatus.ready);
@@ -499,7 +538,7 @@ void main() {
         ],
       },
     );
-    final two = second.kernel();
+    final two = second.kernel(route: null);
     final next = _listen(two);
     two.prepare();
     await settled(() => two.health.status == KernelHealthStatus.ready);
@@ -568,6 +607,111 @@ void main() {
       expect(dsh.launches, hasLength(1));
     },
   );
+
+  test(
+    'a session recorded on a provider this route no longer declares is moved '
+    'onto one it does before the prompt',
+    () async {
+      final dsh = _FakeDsh(
+        models: const {
+          'gw': ['gpt-5', 'mini'],
+        },
+      );
+      dsh.configure = (transport) {
+        transport.current = '["stepcodev2","deepseek-v4.1-flash"]';
+      };
+      final kernel = dsh.kernel(
+        resume: SessionRecord(
+          id: 'old',
+          title: 'Before the route changed',
+          updatedAt: DateTime(2026),
+          cwd: '/project',
+        ),
+        route: _twoUpstreamsRoute,
+      );
+      final events = _listen(kernel);
+      kernel.prepare();
+      await settled(() => kernel.health.status == KernelHealthStatus.ready);
+      kernel.send(KernelTurn(id: 'turn-1', text: 'Hello'));
+      await settled(() => events.whereType<TurnEnded>().isNotEmpty);
+
+      expect(
+        dsh.transport.requests('session/set_config_option').single['params'],
+        {'sessionId': 'old', 'configId': 'model', 'value': '["gw","gpt-5"]'},
+      );
+    },
+  );
+
+  test(
+    'a resumed session\'s recorded model is declared to dsh but not offered: '
+    'dsh can open the session and the kernel moves it onto this route',
+    () async {
+      DshKernel.modelCache = null;
+      final dsh = _FakeDsh(
+        models: const {
+          'stepcodev2': ['deepseek-v4.1-flash'],
+          'gw': ['gpt-5', 'mini'],
+          'other': ['m-1'],
+        },
+      );
+      final kernel = dsh.kernel(
+        resume: SessionRecord(
+          id: 'old',
+          title: 'Before the route changed',
+          updatedAt: DateTime(2026),
+          cwd: '/project',
+        ),
+        settings: const {'model': '["stepcodev2","deepseek-v4.1-flash"]'},
+        route: _twoUpstreamsRoute,
+      );
+      final events = _listen(kernel);
+      kernel.prepare();
+      await settled(() => kernel.health.status == KernelHealthStatus.ready);
+
+      // dsh resolves the session's recorded model at resume: it is declared
+      // beside the route's own, at the same endpoint and credential.
+      final patch = File(dsh.launches.single.patchFile).readAsStringSync();
+      expect(patch, contains("      'stepcodev2':"));
+      expect(patch, contains("          - id: 'deepseek-v4.1-flash'"));
+      // Not a choice of this route.
+      expect(
+        [for (final option in kernel.model.options) option.id],
+        ['["gw","gpt-5"]', '["gw","mini"]', '["other","m-1"]'],
+      );
+
+      kernel.send(KernelTurn(id: 'turn-1', text: 'Hello'));
+      await settled(() => events.whereType<TurnEnded>().isNotEmpty);
+
+      expect(
+        dsh.transport.requests('session/set_config_option').single['params'],
+        {'sessionId': 'old', 'configId': 'model', 'value': '["gw","gpt-5"]'},
+      );
+      expect(kernel.model.selected, '["gw","gpt-5"]');
+    },
+  );
+
+  test('every model the route declares is in the picker before a session lists '
+      'them, not the one kept from before', () async {
+    DshKernel.modelCache = null;
+    final dsh = _FakeDsh(
+      models: const {
+        'gw': ['gpt-5'],
+        'other': ['m-1'],
+      },
+    );
+    final kernel = dsh.kernel(route: _twoUpstreamsRoute);
+    kernel.prepare();
+    await settled(() => kernel.health.status == KernelHealthStatus.ready);
+
+    expect(kernel.sessionId, isNull);
+    expect(
+      [for (final option in kernel.model.options) option.id],
+      ['["gw","gpt-5"]', '["gw","mini"]', '["other","m-1"]'],
+    );
+    expect(kernel.model.options[1].label, 'mini');
+    expect(kernel.model.options[2].group?.label, 'Other');
+    expect(kernel.model.selected, '["gw","gpt-5"]');
+  });
 
   test('a model another kernel kept is dropped, and none is set', () async {
     final dsh = _FakeDsh();
@@ -1570,6 +1714,7 @@ class _FakeDsh {
     Map<String, String> settings = const {},
     Map<String, String> environment = const {'PATH': '/usr/bin'},
     KernelWorkspace? workspace,
+    SessionRecord? resume,
     DshCredentialCheck? credentials,
     DshRoute? route = testDshRoute,
     DshRoutePlan? plan,
@@ -1580,6 +1725,7 @@ class _FakeDsh {
     KernelRegistry.dsh,
     KernelContext(
       cwd: cwd,
+      resume: resume,
       settings: settings,
       workspace: workspace == null ? null : () => workspace,
     ),

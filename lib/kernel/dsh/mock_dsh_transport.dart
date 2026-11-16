@@ -90,6 +90,10 @@ class MockDshTransport implements DshTransport {
   String _current;
   String _effort = 'medium';
 
+  /// The selection the session already holds, as a resumed one may: a
+  /// provider this route no longer declares, say.
+  set current(String value) => _current = value;
+
   /// Asynchronous, as the transport over a process is: a message is
   /// delivered a turn later, and answering it may end the process.
   final StreamController<Map<String, Object?>> _out =

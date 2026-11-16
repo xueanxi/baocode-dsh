@@ -201,16 +201,28 @@ class ModelProviders extends ChangeNotifier {
 
   Future<void> setActionsModel(String? model) => _write(actionsKey, model);
 
-  /// The model DSH runs on (a [modelRef]), picked in Settings → Models; null
-  /// while DSH is left to its own configuration (`dsh/dsh.env`, or its ACP
-  /// profile).
+  /// The value `models.dsh` holds while DSH is told to keep its own
+  /// configuration: no upstream here is declared, and `dsh/dsh.env` (or dsh's
+  /// ACP profile) decides, as it did before Settings → Models could.
+  static const dshOwnValue = 'own';
+
+  /// The model DSH starts on (a [modelRef]), picked in Settings → Models;
+  /// null when none is picked — DSH then starts on the default model, with
+  /// every upstream here offered — or while [dshModelIsOwn].
   String? get dshModel => switch (_read(dshKey)) {
     final String model when model.isNotEmpty && parseModelRef(model) != null =>
       model,
     _ => null,
   };
 
+  /// Whether Settings → Models says to leave DSH on its own configuration
+  /// (`dsh/dsh.env`, or its ACP profile) instead of the upstreams here.
+  bool get dshModelIsOwn => _read(dshKey) == dshOwnValue;
+
   Future<void> setDshModel(String? model) => _write(dshKey, model);
+
+  /// Leaves DSH on its own configuration, whatever upstreams are turned on.
+  Future<void> setDshModelOwn() => _write(dshKey, dshOwnValue);
 
   /// The models DSH may run on: a conversation model of each upstream turned
   /// on. The app's proxy speaks for all of them, so an OpenAI-compatible or

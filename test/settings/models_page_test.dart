@@ -240,11 +240,16 @@ void main() {
         ],
       ),
     );
+    await providers.setDefaultModel('@gw/gpt-5');
     await pump(tester);
     expect(find.text('DSH model'), findsOneWidget);
-    expect(find.text("DSH's own configuration"), findsOneWidget);
+    // Unpicked, the default model starts, and every upstream here is offered.
+    expect(
+      find.text('Automatic (models here) · Gateway · gpt-5'),
+      findsOneWidget,
+    );
 
-    await tester.tap(find.text("DSH's own configuration"));
+    await tester.tap(find.text('Automatic (models here) · Gateway · gpt-5'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Gateway').last);
     await tester.pumpAndSettle();
@@ -253,15 +258,29 @@ void main() {
     await tester.tap(find.text('gpt-5').last);
     await tester.pumpAndSettle();
     expect(providers.dshModel, '@gw/gpt-5');
-    expect(find.text('Gateway · gpt-5'), findsOneWidget);
+    // The default model's row and DSH's both name it now.
+    expect(find.text('Gateway · gpt-5'), findsNWidgets(2));
 
     // Back to dsh's own, with one pick.
-    await tester.tap(find.text('Gateway · gpt-5'));
+    await tester.tap(find.text('Gateway · gpt-5').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text("DSH's own configuration").last);
     await tester.pumpAndSettle();
     expect(providers.dshModel, isNull);
+    expect(providers.dshModelIsOwn, isTrue);
     expect(find.text("DSH's own configuration"), findsOneWidget);
+
+    // And back to following the models here.
+    await tester.tap(find.text("DSH's own configuration"));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Automatic (models here)').last);
+    await tester.pumpAndSettle();
+    expect(providers.dshModel, isNull);
+    expect(providers.dshModelIsOwn, isFalse);
+    expect(
+      find.text('Automatic (models here) · Gateway · gpt-5'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('on BaoCode\'s own core there is no built-in provider: '

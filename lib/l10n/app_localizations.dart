@@ -10584,8 +10584,14 @@ abstract class AppLocalizations {
   /// No description provided for @modelsDshDescription.
   ///
   /// In en, this message translates to:
-  /// **'The model DSH conversations run on, from the upstreams here: its key is handed to dsh at launch, never written to a file. Unset, dsh uses its own configuration (dsh web, or dsh/dsh.env). A change applies to the next conversation.'**
+  /// **'The model DSH conversations start on, from the upstreams here: every model of every upstream turned on is offered in the conversation\'s picker, and the upstream\'s key is handed to dsh at launch, never written to a file. Unset, a conversation starts on the default model, or on the model dsh/dsh.env names while that one is turned on; choose DSH\'s own configuration to let dsh use dsh web or dsh/dsh.env. A change applies to the next conversation.'**
   String get modelsDshDescription;
+
+  /// No description provided for @modelsDshAutomatic.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic (models here)'**
+  String get modelsDshAutomatic;
 
   /// No description provided for @modelsDshOwn.
   ///

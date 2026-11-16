@@ -29,7 +29,7 @@ DSH（DeepSeek Harness）是 BaoCode 的第二个 agent 内核，与 Claude Code
 ## 1. 快速开始
 
 1. 装 dsh：`npm i -g @deepseek-ai/dsh`（本适配器按 `0.2.0-rc.2` 验证）。
-2. 在 **设置 → 模型 → 「DSH 模型」** 里选一个上游与模型：DSH 的对话、提交消息与标题都跑在它上面，key 由 app 在启动时交给 dsh（不落盘）。不选则 DSH 用它自己的配置——`dsh web` 里配的凭据、或本机 `dsh/dsh.env` 的路由（见 §7）；**代码里不写死任何 provider 或 model**。
+2. 在 **设置 → 模型** 里把要用的上游与模型打开（可选 **「DSH 模型」** 指定新对话从哪个模型起跑）：DSH 的对话、提交消息与标题都跑在这些上游上，key 由 app 在启动时交给 dsh（不落盘），新对话的模型选择器列出所有已打开的模型。不选起跑模型则从默认模型起跑；想用 `dsh/dsh.env` 或 dsh web 自己的配置，选「跟随 DSH 自己的配置」（见 §7）。**代码里不写死任何 provider 或 model**。
 3. BaoCode 里新建对话，内核选 **DSH**，输入任务。
 4. 第一次发消息时才会在 `~/.dsh` 里建会话；发之前先把权限档位选好（见 §3）。
 
@@ -242,12 +242,17 @@ TurnEnded(turnId, interrupted:, worked:)
 - 原子写；POSIX 上目录 0700、文件 0600（Windows 继承用户目录 ACL）。**不要手改**：下次启动会按内容重建，改了也会被覆盖。
 - `--patch` 必须传绝对路径：相对路径按被启动进程的 cwd 解析（F21）。补丁是**可执行配置**，id 命中的条目会整体替换其 `config`（不深合并），已有 id 的 `name` 被忽略；引用了没安装的插件会被**静默忽略**，进程照常启动（F21）。
 
-### 模型路由：设置里选的，或 `dsh/dsh.env`
+### 模型路由：设置里的模型，或 `dsh/dsh.env`
 
-两个来源，`DshRoutePlan` 按顺序取一个：
+`DshRoutePlan` 按顺序取：
 
-1. 设置 → 模型 → **「DSH 模型」**（`models.dsh`）：路由按选中的上游与模型现算，走 app 自己的本地模型代理；上游 key 留在 app 里，交给 dsh 的只有 loopback token（环境变量 `BAOCODE_DSH_PROXY_TOKEN`）。这是正常用法，改了设置后**下一通对话**生效。
-2. `dsh/dsh.env`：本机固定路由的老办法（脚本、测试、不想用 app 的上游时）。它的位置、格式与限制见下；设置里选了模型时它不再生效。
+1. `BAOCODE_DSH_ENV` 指名的文件：脚本或测试的明确指令，指了却不存在会直接报错，不回退。
+2. 设置 → 模型 → **「跟随 DSH 自己的配置」**（`models.dsh = own`）：交给 `dsh/dsh.env`，没有就用 dsh ACP profile 自己的模型。
+3. 设置 → 模型里**已打开的上游**：每个上游的每个会话模型都声明给 dsh，补丁把它们写成 dsh 的多个 provider 组，走 app 自己的本地模型代理；上游 key 留在 app 里，交给 dsh 的只有 loopback token（环境变量 `BAOCODE_DSH_PROXY_TOKEN`）。对话从 **「DSH 模型」** 选的模型起跑；没选就从默认模型起跑，而 `dsh/dsh.env` 里的模型若也在其中就沿用它，避免悄悄换模型。这是正常用法，改了设置后**下一通对话**生效。
+4. 设置里一个会话模型都没打开时，`dsh/dsh.env` 作为本机固定路由的老办法（脚本、测试、不想用 app 的上游时）。它的位置、格式与限制见下。
+5. 都没有：dsh 用它自己的 ACP profile。
+
+新对话的模型选择器列出的是第 3 条里所有已打开的模型（多个上游时按上游分组），不止起跑的那一个；在设置里新加或打开一个模型，下一通对话就能选到它。
 
 - 位置：应用数据目录下的 `dsh/dsh.env`，与补丁同目录（Windows `%APPDATA%\baocode\dsh\dsh.env`；macOS `~/Library/Application Support/baocode/dsh/dsh.env`；Linux `~/.config/baocode/dsh/dsh.env`）。`BAOCODE_DSH_ENV` 可指向别的文件（脚本、测试用），**指名的文件优先于设置里选的模型**；指了却不存在会直接报错，不回退。
 - 格式与 `.env` 相同：一行一个 `KEY=value`，`#` 起注释，值可用引号。必填 `provider`、`base_url`、`api_key_env`、`model`；可选 `context_window`（缺省 200000）。本机测试用的一份：
@@ -260,7 +265,7 @@ model=deepseek-v4.1-flash
 context_window=512000
 ```
 
-- **设置里没选、也没有这个文件，就是没有路由**：补丁不写 `llm-pi-ai`、不写 `acp.config`，dsh 用它自己用 profile 里的模型——注意那是 **acp profile 的** `agent-default-model`（`deepseek-official` / `deepseek-flash`），不是 `dsh web` 里选的那个：`dsh web` 的模型选择写在 web profile 的补丁里，两个 profile 不共享；共享的只有凭据库。所以「在 dsh web 里配好模型」并不足以让 BaoCode 的 DSH 对话换个模型，key 却是共享的。
+- **设置里一个会话模型都没打开、也没有这个文件，就是没有路由**：补丁不写 `llm-pi-ai`、不写 `acp.config`，dsh 用它自己用 profile 里的模型——注意那是 **acp profile 的** `agent-default-model`（`deepseek-official` / `deepseek-flash`），不是 `dsh web` 里选的那个：`dsh web` 的模型选择写在 web profile 的补丁里，两个 profile 不共享；共享的只有凭据库。所以「在 dsh web 里配好模型」并不足以让 BaoCode 的 DSH 对话换个模型，key 却是共享的。
 - 文件存在但不可用（缺键、认不得的键、`base_url` 不是 http(s)、`context_window` 不是正数、读不了）→ 启动失败，健康态详情带**文件路径与行号**，不回退到 dsh 的配置。
 - 文件里只有 ref 名，没有 key：密钥仍留在 `~/.dsh`，由 dsh 自己读（F24）。BaoCode 既不写也不删这个文件。
 
@@ -308,8 +313,9 @@ node <dsh>/lib/bin.js --profile headless --patch <临时补丁> --json -
 
 会话里出现 error 提示：`dsh has no credential for <路由的 api_key_env>; add it in dsh web (Models) or set the environment variable.` 这不是启动失败，进程照常起，每轮会以 `MISSING_CREDENTIAL: …` 失败。
 
+- **旧会话报 `no adapter registered for provider "…"`**（或 `pi-ai provider "…" has no configured model "…"`）：这通会话在路由改动前记下了另一个上游/模型的模型选择。dsh 在 `session/resume` 时就要解析这条记录，先换模型再打开是做不到的；内核因此把该对话自己记下的模型在补丁里一并声明（不在选择器里列出），会话打开后立刻切到当前路由的模型（见 `docs/spec/dsh-kernel.md` §5.4）。若仍出现，说明这条对话没留下自己的模型记录（很旧的会话）：换一个新对话，或把该上游临时加回 **设置 → 模型** / `dsh/dsh.env`，进去切一次模型后即可去掉。
 - **设置 → 模型 里选了「DSH 模型」**：不该出现这条——token 由 app 在启动时放进环境。若仍出现，看是不是 `BAOCODE_DSH_ENV` 指到了别的路由文件，或 dsh 的日志里代理端口错了。
-- **没有选模型、也没有 `dsh/dsh.env`**：dsh 用它 acp profile 自己的默认模型（`deepseek-official` / `deepseek-flash`），要的是 `DEEPSEEK_API_KEY`。修法三选一：在 **设置 → 模型 → 「DSH 模型」** 里选一个上游（推荐）；在 **dsh web → Models** 里给 DeepSeek 写入 key（共享的是凭据库，不是 web profile 的模型选择）；或在 `~/.dsh/.env` / `~/.zshrc` 里提供 `DEEPSEEK_API_KEY`。
+- **设置里一个会话模型都没打开、也没有 `dsh/dsh.env`**：dsh 用它 acp profile 自己的默认模型（`deepseek-official` / `deepseek-flash`），要的是 `DEEPSEEK_API_KEY`。修法三选一：在 **设置 → 模型** 里打开一个上游的模型（推荐）；在 **dsh web → Models** 里给 DeepSeek 写入 key（共享的是凭据库，不是 web profile 的模型选择）；或在 `~/.dsh/.env` / `~/.zshrc` 里提供 `DEEPSEEK_API_KEY`。
 - **用的是 `dsh/dsh.env` 路由**：它的 `api_key_env` 必须与 `~/.dsh/.credentials.yaml` 的 `refs:` 里的 key **逐字一致**，或在环境里同名存在。改路由名时一起改。BaoCode 不复制、不读取 key 的值。
 
 同一条提示每个会话只说一次（`notice:credential:<ref>`）。
@@ -399,8 +405,9 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 - [ ] 中途停止可用，停止后还能继续对话
 - [ ] 新对话发出第一条消息后，标题从首行变成 dsh 生成的短语；双击标题可改名，改后不再被生成的标题覆盖
 - [ ] 切换模型立即生效，不重启；dsh 没报思考强度时没有该选项
-- [ ] 设置 → 模型 → 「DSH 模型」选一个上游后，新对话的模型选择器只有那一个分组，模型都来自它；不用在 dsh 里另配 key
-- [ ] 同一处选回「跟随 DSH 自己的配置」后，新对话回到 dsh 自己的模型（缺 key 时看到的是 dsh 的 `MISSING_CREDENTIAL` 原文）
+- [ ] 设置 → 模型里新加或打开一个模型后，新对话的模型选择器就有它；多个上游时按上游分组，不用在 dsh 里另配 key
+- [ ] 「DSH 模型」选的模型是新对话的起跑模型；不选则默认模型起跑，本机 `dsh/dsh.env` 的模型在其中时沿用它
+- [ ] 同一处选「跟随 DSH 自己的配置」后，新对话回到 `dsh/dsh.env` 或 dsh 自己的模型（缺 key 时看到的是 dsh 的 `MISSING_CREDENTIAL` 原文）
 - [ ] 第一次回复前上下文窗口是所选模型的窗口（文件路由取 `context_window`，app 路由取模型的），之后随 `usage_update` 变化
 - [ ] 设置 → 用量里能看到这次 DSH 对话的调用：输入/输出/缓存 tokens 与 dsh 的账一致，金额有估算价
 - [ ] 视图切走再回来约 6 秒后可用，会话接着上一轮
@@ -438,8 +445,8 @@ node tool/dsh_smoke.mjs --help        # 打印用法，退出 0，不启动 dsh
 |---|---|
 | `lib/kernel/dsh/dsh_locate.dart`、`dsh_locate_io.dart` | 定位 dsh，解析 shim、设置值、平台 npm 全局根，读 `package.json` 版本 |
 | `lib/kernel/dsh/dsh_patch.dart` | 生成/缓存 ACP 补丁，原子写、权限位、bash 两行的条件；`askContent`（一次性问答的补丁） |
-| `lib/kernel/dsh/dsh_route.dart` | 一条路由：provider、endpoint、`apiKeyEnv`、模型与它声明的模型表、`api`；`dsh.env` 的解析、校验、路径与 `BAOCODE_DSH_ENV` |
-| `lib/kernel/dsh/dsh_route_plan.dart` | 路由的来源与优先级：设置 → 模型（经 app 的本地模型代理，token 放环境）→ `dsh/dsh.env` → dsh 自己的；一次性问答共用 |
+| `lib/kernel/dsh/dsh_route.dart` | 一条路由：起跑的 provider/model，以及每个上游的 endpoint、`apiKeyEnv`、`api` 与模型表；`dsh.env` 的解析、校验、路径与 `BAOCODE_DSH_ENV` |
+| `lib/kernel/dsh/dsh_route_plan.dart` | 路由的来源与优先级：设置 → 模型里所有已打开的上游（经 app 的本地模型代理，token 放环境；起跑模型可指定）→ `dsh/dsh.env`（没打开任何模型时）→ dsh 自己的；一次性问答共用 |
 | `lib/kernel/dsh/dsh_ask.dart`、`dsh_ask_io.dart` | 一次性问答：`headless` 的 argv、`final` 事件的解析、起进程与收尾（临时目录、会话根、read-only、超时/取消） |
 | `lib/kernel/dsh/dsh_bash.dart` | 找本机 Git 的 `bash.exe`：`BAOCODE_GIT_BASH` → 登录 shell 的 PATH（跳过 WSL 的那份）→ `git --exec-path` 所属 Git → Program Files 里的 Git |
 | `lib/kernel/dsh/dsh_transport.dart`、`dsh_transport_io.dart` | 子进程传输：按行 JSON-RPC、stderr 环（落库前脱敏）、退出消息、进程树收尾与登记 |

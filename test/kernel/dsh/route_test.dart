@@ -242,4 +242,74 @@ nonsense=1
       );
     });
   });
+
+  group('a choice a session kept from an earlier route', () {
+    const route = DshRoute(
+      provider: 'gw',
+      displayName: 'Gateway',
+      baseUrl: 'http://127.0.0.1:1/p/gw',
+      apiKeyEnv: 'BAOCODE_DSH_PROXY_TOKEN',
+      api: DshApi.anthropicMessages,
+      model: 'gpt-5',
+      contextWindow: 400000,
+      models: [
+        DshModel(id: 'gpt-5', contextWindow: 400000),
+        DshModel(id: 'mini', contextWindow: 100000),
+      ],
+      viaProxy: true,
+    );
+
+    test('is declared for dsh, and still not offered', () {
+      final carried = route.carrying(['["stepcodev2","deepseek-v4.1-flash"]']);
+
+      expect(carried.recorded, [('stepcodev2', 'deepseek-v4.1-flash')]);
+      // The picker's list: the route's own models, not what dsh resolves.
+      expect(
+        [for (final upstream in carried.declaredUpstreams) upstream.provider],
+        ['gw'],
+      );
+      // The patch's: one more upstream, at the same endpoint and credential,
+      // so a session recorded on it opens before it is moved onto `gw`.
+      final upstreams = carried.patchUpstreams;
+      expect(
+        [for (final upstream in upstreams) upstream.provider],
+        ['gw', 'stepcodev2'],
+      );
+      expect(upstreams.last.baseUrl, route.baseUrl);
+      expect(upstreams.last.apiKeyEnv, route.apiKeyEnv);
+      expect(upstreams.last.api, route.api);
+      expect(
+        [for (final model in upstreams.last.models) model.id],
+        ['deepseek-v4.1-flash'],
+      );
+    });
+
+    test('is merged under the upstream it names, where that one is kept', () {
+      final carried = route.carrying(['["gw","old-model"]']);
+
+      expect(carried.recorded, [('gw', 'old-model')]);
+      expect(
+        [for (final model in carried.patchUpstreams.single.models) model.id],
+        ['gpt-5', 'mini', 'old-model'],
+      );
+      // Still not a choice of this route.
+      expect(
+        [for (final model in carried.declared) model.id],
+        ['gpt-5', 'mini'],
+      );
+    });
+
+    test('a choice the route offers, or not a dsh value, changes nothing', () {
+      expect(identical(route.carrying(['["gw","mini"]']), route), isTrue);
+      expect(identical(route.carrying(['claude-opus-4']), route), isTrue);
+      expect(identical(route.carrying([null]), route), isTrue);
+    });
+
+    test('dsh\'s model value is the only shape read', () {
+      expect(DshRoute.choiceOf('["gw","mini"]'), ('gw', 'mini'));
+      expect(DshRoute.choiceOf('gw/mini'), isNull);
+      expect(DshRoute.choiceOf('["gw"]'), isNull);
+      expect(DshRoute.choiceOf(null), isNull);
+    });
+  });
 }

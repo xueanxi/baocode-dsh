@@ -346,11 +346,29 @@ class _ModelsSettingsPageState extends State<ModelsSettingsPage> {
   Widget _dshRow(BuildContext context) {
     final l10n = context.l10n;
     final current = _providers.dshModel;
+    final own = _providers.dshModelIsOwn;
     final resolved = _providers.resolve(current);
-    final shown = resolved == null
-        ? l10n.modelsDshOwn
-        : '${resolved.$1.name} · ${resolved.$2.displayName}';
+    // What a conversation starts on while none is picked here: the default
+    // model, else the first one turned on. Every model of every upstream
+    // turned on is offered beside it, whichever starts.
+    final automatic = _providers.dshModels.isEmpty
+        ? null
+        : _providers.resolve(_providers.defaultModel);
+    final String shown;
+    if (resolved != null) {
+      shown = '${resolved.$1.name} · ${resolved.$2.displayName}';
+    } else if (!own && _providers.dshModels.isNotEmpty) {
+      // The default model is named while it is set; otherwise the one that
+      // starts is dsh.env's, or the first, and only the setting is shown.
+      shown = automatic == null
+          ? l10n.modelsDshAutomatic
+          : '${l10n.modelsDshAutomatic} · '
+                '${automatic.$1.name} · ${automatic.$2.displayName}';
+    } else {
+      shown = l10n.modelsDshOwn;
+    }
     void set(String? model) => unawaited(_providers.setDshModel(model));
+    void setOwn() => unawaited(_providers.setDshModelOwn());
     final providers = <ModelProvider>[];
     for (final (:provider, model: _) in _providers.dshModels) {
       if (!providers.contains(provider)) providers.add(provider);
@@ -363,10 +381,11 @@ class _ModelsSettingsPageState extends State<ModelsSettingsPage> {
         semanticLabel: l10n.modelsChoiceLabel(l10n.modelsDsh, shown),
         entries: () => [
           IdeMenuAction(
-            l10n.modelsDshOwn,
-            checked: current == null,
+            l10n.modelsDshAutomatic,
+            checked: current == null && !own,
             onSelected: () => set(null),
           ),
+          IdeMenuAction(l10n.modelsDshOwn, checked: own, onSelected: setOwn),
           if (providers.isNotEmpty) const IdeMenuSeparator(),
           for (final provider in providers)
             IdeMenuAction(

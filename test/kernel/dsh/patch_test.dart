@@ -67,6 +67,35 @@ void main() {
     expect(text.endsWith('\n'), isTrue);
   });
 
+  test('a choice a resumed session kept is declared beside the route', () {
+    final text = DshPatch.content(
+      version: '0.2.0-rc.2',
+      route: route.carrying(['["stepcodev2","deepseek-v4.1-flash-old"]']),
+    );
+
+    // The route itself is unchanged, and dsh is started on it.
+    expect(text, contains("    provider: 'stepcodev2'"));
+    expect(text, contains("    model: 'deepseek-v4.1-flash'"));
+    // What the session recorded is resolved under the route's own upstream,
+    // so `session/resume` opens it and the kernel can move off it.
+    expect(text, contains("          - id: 'deepseek-v4.1-flash'"));
+    expect(text, contains("          - id: 'deepseek-v4.1-flash-old'"));
+
+    // An upstream the route dropped gets one of its own, at the same
+    // endpoint and credential.
+    final elsewhere = DshPatch.content(
+      version: '0.2.0-rc.2',
+      route: route.carrying(['["old-upstream","a-model"]']),
+    );
+    expect(elsewhere, contains("      'old-upstream':"));
+    expect(elsewhere, contains("          - id: 'a-model'"));
+    expect(
+      elsewhere,
+      contains("        baseURL: 'https://i-ai-gw.stepx.com/v1'"),
+    );
+    expect(elsewhere, contains("        apiKeyEnv: 'STEPCODEV2_API_KEY'"));
+  });
+
   test('no route: the patch leaves the profile its own', () {
     final text = DshPatch.content(version: '0.2.0-rc.2');
 

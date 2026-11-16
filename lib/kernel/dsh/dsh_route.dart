@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -27,6 +28,39 @@ enum DshApi {
 
   /// As the patch's `api` has it.
   final String id;
+}
+
+/// One upstream a route declares to dsh: where it answers, the credential
+/// ref dsh reads its key under, how it is spoken to, and the models it
+/// offers. dsh groups its picker by these, so each one is a heading of its
+/// own.
+final class DshUpstream {
+  const DshUpstream({
+    required this.provider,
+    required this.baseUrl,
+    required this.apiKeyEnv,
+    this.api = DshApi.openaiCompletions,
+    this.displayName,
+    this.models = const [],
+  });
+
+  /// The name dsh knows this upstream by: a key of the patch's provider
+  /// dictionary.
+  final String provider;
+
+  final String baseUrl;
+
+  /// The credential ref dsh reads the key under — a name, never a key.
+  final String apiKeyEnv;
+
+  final DshApi api;
+
+  /// What dsh lists the upstream as; [provider] when null.
+  final String? displayName;
+
+  /// The models it offers. Never empty in a patch: a route with no list for
+  /// an upstream has its one model there.
+  final List<DshModel> models;
 }
 
 /// One model a route declares to dsh: its id, the window the picker shows
@@ -93,7 +127,9 @@ final class DshRoute {
     this.api = DshApi.openaiCompletions,
     this.displayName,
     this.models = const [],
+    this.upstreams = const [],
     this.viaProxy = false,
+    this.recorded = const [],
   });
 
   /// The file a machine keeps its route in, under the data directory's `dsh/`
@@ -130,20 +166,149 @@ final class DshRoute {
   /// What dsh lists the provider as; [provider] when null.
   final String? displayName;
 
-  /// The models the patch declares, the picked one among them; empty for
-  /// [model] alone. A route the app builds names each of the provider's, so
-  /// that dsh's picker switches among them without a restart.
+  /// The models the patch declares for [provider], the picked one among
+  /// them; empty for [model] alone. A route the app builds names each of the
+  /// provider's, so that dsh's picker switches among them without a restart.
   final List<DshModel> models;
+
+  /// The upstreams the patch declares, each with its own models: dsh's
+  /// picker switches among them without a restart, and groups them by
+  /// upstream. Empty for this route's one upstream ([provider]) alone.
+  final List<DshUpstream> upstreams;
 
   /// Whether this is the app's own route: through its model proxy. The patch
   /// then quiets dsh's DeepSeek adapters, and the proxy is told not to keep
   /// the calls (dsh's own usage report is the conversation's).
   final bool viaProxy;
 
+  /// Model choices a session kept from an earlier route, as `(provider,
+  /// model)`: what dsh recorded before the route named another upstream or
+  /// another model. A resumed session's recorded choice is resolved before
+  /// it can be moved onto this route — dsh answers `session/resume` with
+  /// `no adapter registered for provider "…"` (or "no configured model")
+  /// when it cannot — so the patch declares these beside the route's own
+  /// ([patchUpstreams]) even though this route does not offer them
+  /// ([declaredUpstreams], and the picker, do not name them).
+  final List<(String, String)> recorded;
+
   /// [models], or the one model this route runs on when it names no list.
   List<DshModel> get declared => models.isEmpty
       ? [DshModel(id: model, contextWindow: contextWindow, images: true)]
       : models;
+
+  /// The upstreams the patch declares: [upstreams], or this route's one
+  /// ([provider]) with [declared] when it names none.
+  List<DshUpstream> get declaredUpstreams => upstreams.isEmpty
+      ? [
+          DshUpstream(
+            provider: provider,
+            baseUrl: baseUrl,
+            apiKeyEnv: apiKeyEnv,
+            api: api,
+            displayName: displayName,
+            models: declared,
+          ),
+        ]
+      : upstreams;
+
+  /// Whether [choice] is one of the models this route offers.
+  bool offers((String, String) choice) => declaredUpstreams.any(
+    (upstream) =>
+        upstream.provider == choice.$1 &&
+        upstream.models.any((model) => model.id == choice.$2),
+  );
+
+  /// [this] with the choices [values] name — dsh's model option values,
+  /// `["provider","model"]` — declared for a resumed session where this
+  /// route does not offer them ([recorded]); [this] when every one is
+  /// offered already, or is not a dsh value.
+  DshRoute carrying(Iterable<String?> values) {
+    final recorded = [...this.recorded];
+    for (final value in values) {
+      final choice = choiceOf(value);
+      if (choice == null || offers(choice) || recorded.contains(choice)) {
+        continue;
+      }
+      recorded.add(choice);
+    }
+    if (recorded.length == this.recorded.length) return this;
+    return DshRoute(
+      provider: provider,
+      baseUrl: baseUrl,
+      apiKeyEnv: apiKeyEnv,
+      model: model,
+      contextWindow: contextWindow,
+      api: api,
+      displayName: displayName,
+      models: models,
+      upstreams: upstreams,
+      viaProxy: viaProxy,
+      recorded: recorded,
+    );
+  }
+
+  /// The `(provider, model)` [value] names — dsh's model option value,
+  /// `["provider","model"]` — or null when it is not one (a value another
+  /// kernel wrote).
+  static (String, String)? choiceOf(String? value) {
+    if (value == null) return null;
+    try {
+      if (jsonDecode(value) case [final Object provider, final Object model]) {
+        return ('$provider', '$model');
+      }
+    } on FormatException {
+      // Not dsh's shape: nothing to declare for it.
+    }
+    return null;
+  }
+
+  /// What the patch declares: [declaredUpstreams] and [recorded] beside
+  /// them — a recorded model under the upstream it names, or under an
+  /// upstream of its own (this route's endpoint and credential) where the
+  /// route dropped that upstream altogether. [declaredUpstreams] stays what
+  /// the picker offers.
+  List<DshUpstream> get patchUpstreams {
+    if (recorded.isEmpty) return declaredUpstreams;
+    final upstreams = <DshUpstream>[...declaredUpstreams];
+    final extra = <String, List<DshModel>>{};
+    for (final (provider, model) in recorded) {
+      final at = upstreams.indexWhere(
+        (upstream) => upstream.provider == provider,
+      );
+      if (at >= 0) {
+        final upstream = upstreams[at];
+        if (upstream.models.any((one) => one.id == model)) continue;
+        upstreams[at] = DshUpstream(
+          provider: upstream.provider,
+          displayName: upstream.displayName,
+          baseUrl: upstream.baseUrl,
+          apiKeyEnv: upstream.apiKeyEnv,
+          api: upstream.api,
+          models: [...upstream.models, _recordedModel(model)],
+        );
+        continue;
+      }
+      extra.putIfAbsent(provider, () => []).add(_recordedModel(model));
+    }
+    for (final MapEntry(key: provider, value: models) in extra.entries) {
+      upstreams.add(
+        DshUpstream(
+          provider: provider,
+          displayName: provider,
+          baseUrl: baseUrl,
+          apiKeyEnv: apiKeyEnv,
+          api: api,
+          models: models,
+        ),
+      );
+    }
+    return upstreams;
+  }
+
+  /// A recorded model as the patch declares it: its id and the window this
+  /// route was taken to hold, until it is moved off it.
+  DshModel _recordedModel(String model) =>
+      DshModel(id: model, contextWindow: contextWindow);
 
   /// The route kept under [directory], or the one [pathVariable] names; null
   /// when neither is there, dsh's own configuration being the route then.
